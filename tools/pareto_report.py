@@ -32,18 +32,28 @@ def load_fitness(results_dir):
 
 
 def load_generations(log_path):
-    """Generation in which each gene id is first mentioned."""
-    gen_of, gen = {}, 0
+    """Generation each gene id is first mentioned in, and whether this run resumed.
+
+    The resume flag matters: on a resumed run the orchestrator restores a
+    population from a checkpoint and the fresh log names ONLY those survivors
+    until print_ancestry() dumps the full history, which does not happen until
+    partway through the first resumed generation. Everything evaluated in earlier
+    generations of the same search is therefore missing from gen_of for that
+    whole window, and is indistinguishable from a genuinely abandoned run.
+    """
+    gen_of, gen, resumed = {}, 0, False
     if not log_path or not os.path.exists(log_path):
-        return gen_of
+        return gen_of, resumed
     for line in open(log_path, errors="replace"):
+        if "Loaded checkpoint from" in line:
+            resumed = True
         m = re.search(r"STARTING GENERATION:\s*(\d+)", line)
         if m:
             gen = int(m.group(1)) + 1            # pop created before gen 0 => 0
             continue
         for gid in re.findall(r"xXx[A-Za-z0-9]+", line):
             gen_of.setdefault(gid, gen)
-    return gen_of
+    return gen_of, resumed
 
 
 def pareto(points):
@@ -61,13 +71,18 @@ def main():
     ap.add_argument("--results", required=True)
     ap.add_argument("--log", default=None)
     ap.add_argument("--out", default="pareto_out")
+    ap.add_argument("--strict", action="store_true",
+                    help="on a resumed run, drop genes missing from this log "
+                         "instead of including them")
+    ap.add_argument("--max-circuits", type=int, default=40,
+                    help="cap rows in the circuit grid (front members first)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
 
     fit = load_fitness(a.results)
     if not fit:
         print("no parsable results yet"); return
-    gen_of = load_generations(a.log)
+    gen_of, resumed = load_generations(a.log)
     # results/ is never cleared between runs, so it accumulates genes from every
     # previous (often crashed) run. Those are absent from THIS run's log, and
     # gen_of.get(g, 0) would silently relabel them as generation 0 and let them
@@ -75,11 +90,24 @@ def main():
     # missing entirely gen_of is empty - fall back to reporting everything rather
     # than emitting an empty front.
     if gen_of:
-        stale = [g for g in fit if g not in gen_of]
-        for g in stale:
-            del fit[g]
-        if stale:
-            print(f"  ignored stale results   : {len(stale)} (from earlier runs)")
+        unknown = [g for g in fit if g not in gen_of]
+        if unknown and resumed and not a.strict:
+            # On a resume these are AMBIGUOUS, not stale: they are equally
+            # consistent with earlier generations of this same search, whose gene
+            # ids do not reach the log until the ancestry dump. Dropping them
+            # would silently delete real front members. Keep them and say so -
+            # an overstated front the operator can see beats an understated one
+            # they cannot.
+            print(f"  !! RESUMED RUN - {len(unknown)} genes are in results/ but not yet in")
+            print(f"     this log. They may be earlier generations of THIS search, so they")
+            print(f"     are INCLUDED and their generation numbers are unreliable.")
+            print(f"     Pass --strict to drop them instead.")
+        else:
+            for g in unknown:
+                del fit[g]
+            if unknown:
+                why = "forced by --strict" if a.strict else "from earlier runs"
+                print(f"  ignored stale results   : {len(unknown)} ({why})")
         if not fit:
             print("no results from this run yet"); return
     gids = sorted(fit, key=lambda g: (gen_of.get(g, 0), fit[g][0]))
@@ -179,6 +207,17 @@ def main():
     imgs = [(gids[i], pts[i], os.path.join(a.results, f"{gids[i]}_circuit.png"))
             for i in order]
     imgs = [t for t in imgs if os.path.exists(t[2])]
+    # The grid is one row per individual at 2.5in / 170dpi, so its height grows
+    # without bound - measured ~425 px per individual. Past ~135 individuals the
+    # PNG trips PIL's decompression-bomb limit and mpimg.imread, Jupyter and most
+    # viewers refuse to open it; at the 500-genome budget it is ~212,000 px tall
+    # and needs multiple GB of RSS to render. `order` puts the front first, so
+    # capping keeps every non-dominated circuit.
+    if len(imgs) > a.max_circuits:
+        dropped = len(imgs) - a.max_circuits
+        imgs = imgs[:a.max_circuits]
+        print(f"  circuit grid capped     : {a.max_circuits} shown, {dropped} omitted "
+              f"(front kept; raise with --max-circuits)")
     if imgs:
         n = len(imgs)
         fig, axes = plt.subplots(n, 1, figsize=(11.5, 2.5 * n), dpi=170)
