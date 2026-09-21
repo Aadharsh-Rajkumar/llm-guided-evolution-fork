@@ -3,7 +3,7 @@
 #SBATCH -t 8:00:00
 #SBATCH --nodes=1
 #SBATCH -G 2
-#SBATCH -C "H200"
+#SBATCH -C "H100"
 #SBATCH --mem 160G
 #SBATCH -c 16
 #SBATCH --output=run_job_outputs/server/slurm-%j.out
@@ -43,4 +43,4 @@ else
     echo "Skipping island controller submission (SUBMIT_ISLAND_CONTROLLER=${SUBMIT_ISLAND_CONTROLLER})"
 fi
 
-uv run python -m uvicorn server:app --host $SERVER_HOSTNAME --port 8137 --workers 1
+uv run python -m uvicorn server:app --host $SERVER_HOSTNAME --port 8169 --workers 1
