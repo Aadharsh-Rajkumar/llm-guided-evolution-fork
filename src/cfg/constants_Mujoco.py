@@ -13,7 +13,7 @@ DATA_PATH = "./cifar10"
 PACE_ICE = True
 RUNLINE_AMP = ""
 #: Location where the current seed repo resides
-SOTA_ROOT = os.path.join(ROOT_DIR, 'sota/MujocoRL')
+SOTA_ROOT = os.path.join(ROOT_DIR, 'sota/QuantumVQC')
 #: Location where the network architecture for the seed resides
 SEED_NETWORK = os.path.join(SOTA_ROOT, "network.py")
 #: Model basename prefix (used in file naming: network_{gene_id}.py)
@@ -26,7 +26,7 @@ VARIANT_DIR = os.path.join(SOTA_ROOT, "models")
 #slurm output
 SLURM_OUTPUT_PATH = "run_job_outputs/"
 #: The training/evaluation script for RL (relative path for cluster compatibility)
-TRAIN_FILE = "sota/MujocoRL/train_rl.py"
+TRAIN_FILE = "sota/QuantumVQC/train.py"
 ISLAND_TEMP_SCRIPT = os.path.join("src", "island_temp_script_{ISLAND_NUM}.sh")
 #: Dedicated uv project used only for Mujoco RL evaluation jobs (relative path for cluster)
 MUJOCO_EVAL_PROJECT_DIR = "sota/MujocoRL/eval_env"
@@ -36,7 +36,7 @@ MUJOCO_EVAL_EPISODES = int(os.getenv("MUJOCO_EVAL_EPISODES", "10"))
 MUJOCO_EVAL_MAX_STEPS = int(os.getenv("MUJOCO_EVAL_MAX_STEPS", "1000"))
 
 #: Output directory for intermediate generation data
-OUTPUT_DIR = "mujoco_rl_output"
+OUTPUT_DIR = "quantum_vqc_output"
 PORT = 8169
 
 CLUSTER = "pace-ice"
@@ -127,10 +127,7 @@ UV_PYTHON = f"env -u VIRTUAL_ENV uv run --isolated --project {MUJOCO_EVAL_PROJEC
 RUNLINE_TMP = "{}_{}"
 EVAL_RUNLINE = (
     f"{UV_PYTHON} {{}} "
-    "-network models.{} "
-    f"-timesteps {MUJOCO_EVAL_TIMESTEPS} "
-    f"-eval_episodes {MUJOCO_EVAL_EPISODES} "
-    f"-eval_max_steps {MUJOCO_EVAL_MAX_STEPS}"
+    "-network models.{}"
 )
 EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(os.getenv("LLMGE_EVAL_NO_PROGRESS_TIMEOUT_SECONDS", str(40 * 60)))
 
@@ -190,7 +187,7 @@ export HUGGINGFACE_HUB_TOKEN="${{HF_TOKEN}}"
 Evolution Constants/Params
 """
 #: 2-objective setup: maximize reward, minimize parameter count.
-FITNESS_WEIGHTS = (1.0, -1.0)
+FITNESS_WEIGHTS = (-1.0, -1.0)
 INVALID_FITNESS_MAX = tuple([float(x * np.inf * -1) for x in FITNESS_WEIGHTS])
 #: A unique placeholder value used before fitness is evaluated
 PLACEHOLDER_FITNESS = tuple([int(x * 9999999999 * -1) for x in FITNESS_WEIGHTS])
@@ -199,8 +196,8 @@ GENERATION = 0
 PROB_QC = 0.0
 PROB_EOT = 0.0  # Disable EoT for initial RL runs (needs prior elite genes)
 num_generations = 30  # Number of generations
-start_population_size = 32  # Starting population size
-population_size = 32  # Population size each generation
+start_population_size = 16  # Starting population size
+population_size = 8  # Population size each generation
 crossover_probability = 0.35  # Probability of mating two individuals
 mutation_probability = 0.8  # Probability of mutating an individual
 num_elites = 8

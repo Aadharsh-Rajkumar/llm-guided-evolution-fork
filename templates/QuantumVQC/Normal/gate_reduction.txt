@@ -1,0 +1,8 @@
+Simplify or reduce the gate count of this Qiskit VQC chunk without breaking its function signature, in order to lower the hardware-weighted gate count objective (two-qubit gates count 5x a single-qubit gate).
+
+You are editing sota/QuantumVQC/network.py.
+
+The current code block:
+```python
+{}
+```

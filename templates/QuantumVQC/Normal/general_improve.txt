@@ -1,0 +1,8 @@
+Improve this Qiskit variational quantum circuit (VQC) chunk for a breast cancer classification task.
+
+You are editing sota/QuantumVQC/network.py, not a classical neural network or classifier. The circuit must remain a valid Qiskit QuantumCircuit acting on exactly N_QUBITS qubits.
+
+The current code block:
+```python
+{}
+```

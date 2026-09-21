@@ -1,0 +1,8 @@
+Modify this Qiskit VQC chunk by changing which trainable rotation gates are used (for example RY, RZ, RX) or by changing the order/placement of gates, while keeping the function signature and qubit count unchanged.
+
+You are editing sota/QuantumVQC/network.py.
+
+The current code block:
+```python
+{}
+```

@@ -1,0 +1,8 @@
+Propose a structural variation of this Qiskit VQC chunk that could improve validation cross-entropy while keeping the circuit's hardware-weighted gate count reasonable (two-qubit gates cost 5x a single-qubit gate).
+
+You are editing sota/QuantumVQC/network.py. The circuit must remain a valid Qiskit QuantumCircuit acting on exactly N_QUBITS qubits.
+
+The current code block:
+```python
+{}
+```
