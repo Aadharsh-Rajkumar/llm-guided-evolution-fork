@@ -7,14 +7,14 @@ cross-entropy, obj2 = hardware-weighted gate cost.
 
   python tools/pareto_report.py --results <dir> --log <file> --out <dir>
 """
-import argparse, os, re, glob
+import argparse, json, os, re, glob
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 
-SEED_OBJ = (0.43185453749328556, 60.0)          # the seed, measured on PACE
+SEED_OBJ = (0.14814814814814814, 28.0)   # the seed on PACE: val error 0.1481, 28 gates
 TEAL, PURPLE, LTEAL, GRAY = "#418faf", "#4c4a86", "#7fc5d4", "#9ba0a5"
 NAVY, MUTED, ACC = "#2d2a54", "#6e6f7b", "#b5504a"
 
@@ -24,10 +24,25 @@ def load_fitness(results_dir):
     for f in glob.glob(os.path.join(results_dir, "xXx*_results.txt")):
         gid = os.path.basename(f)[:-len("_results.txt")]
         try:
-            a, b = open(f).read().split(",")
-            out[gid] = (float(a), float(b))
+            # The first two values are the objectives the harness selects on; the
+            # seed writes extra diagnostics after them, so take only what we need.
+            parts = open(f).read().split(",")
+            out[gid] = (float(parts[0]), float(parts[1]))
         except Exception:
             pass                                 # unparsable = invalid individual
+    return out
+
+
+def load_metric_pair(results_dir, xk, yk):
+    """Any two measures from <gene>_metrics.json. BOTH are treated as minimised."""
+    out = {}
+    for f in glob.glob(os.path.join(results_dir, "xXx*_metrics.json")):
+        gid = os.path.basename(f)[:-len("_metrics.json")]
+        try:
+            m = json.load(open(f))
+            out[gid] = (float(m[xk]), float(m[yk]))
+        except Exception:
+            pass
     return out
 
 
@@ -74,12 +89,27 @@ def main():
     ap.add_argument("--strict", action="store_true",
                     help="on a resumed run, drop genes missing from this log "
                          "instead of including them")
+    ap.add_argument("--x", default=None,
+                    help="redraw on any measure from <gene>_metrics.json, e.g. "
+                         "val_cross_entropy, weighted_gate_cost, depth, two_qubit_gates. "
+                         "Both axes are treated as lower-is-better, so do not pass an "
+                         "accuracy field - use val_error.")
+    ap.add_argument("--y", default=None)
     ap.add_argument("--max-circuits", type=int, default=40,
                     help="cap rows in the circuit grid (front members first)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
 
-    fit = load_fitness(a.results)
+    global SEED_OBJ
+    if bool(a.x) != bool(a.y):
+        print("--x and --y must be given together"); return
+    if a.x:
+        fit = load_metric_pair(a.results, a.x, a.y)
+        SEED_OBJ = None            # the recorded seed point only applies to the objectives
+        XLAB, YLAB = a.x, a.y
+    else:
+        fit = load_fitness(a.results)
+        XLAB, YLAB = "obj1  —  validation error (1 - accuracy)", "obj2  —  gate count"
     if not fit:
         print("no parsable results yet"); return
     gen_of, resumed = load_generations(a.log)
@@ -160,8 +190,9 @@ def main():
                 label="trade-off curve (interpolated)")
 
     ax.scatter(fx, fy, s=210, facecolor="none", edgecolor=ACC, lw=2.0, zorder=4)
-    ax.scatter([SEED_OBJ[0]], [SEED_OBJ[1]], marker="*", s=420, color=NAVY,
-               zorder=5, label="seed (individual zero)")
+    if SEED_OBJ:
+        ax.scatter([SEED_OBJ[0]], [SEED_OBJ[1]], marker="*", s=420, color=NAVY,
+                   zorder=5, label="seed (individual zero)")
 
     # Label EVERY individual, not just the non-dominated ones - the dominated
     # points are the record of what the search actually tried. Genes sharing a
@@ -190,8 +221,8 @@ def main():
                     color=ACC if on_front else MUTED,
                     weight="bold" if on_front else "normal", zorder=6)
 
-    ax.set_xlabel("obj1  —  validation cross-entropy  (lower is better)", fontsize=11, color="#3f4149")
-    ax.set_ylabel("obj2  —  weighted gate cost  (lower is better)", fontsize=11, color="#3f4149")
+    ax.set_xlabel(f"{XLAB}  (lower is better)", fontsize=11, color="#3f4149")
+    ax.set_ylabel(f"{YLAB}  (lower is better)", fontsize=11, color="#3f4149")
     ax.set_title(f"Pareto front — {len(pts)} evaluated individuals, "
                  f"{len(front)} non-dominated, {gmax + 1} generation(s)",
                  fontsize=13.5, weight="bold", color=NAVY, loc="left", pad=12)
@@ -248,7 +279,7 @@ def main():
     seen = {}
     for i in front:
         o1, o2 = pts[i]
-        if o1 <= SEED_OBJ[0] and o2 <= SEED_OBJ[1]:
+        if SEED_OBJ and o1 <= SEED_OBJ[0] and o2 <= SEED_OBJ[1]:
             tag = "ties seed" if (o1, o2) == SEED_OBJ else "DOMINATES seed"
         else:
             tag = ""
