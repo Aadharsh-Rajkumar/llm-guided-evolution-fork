@@ -11,8 +11,8 @@ Contract with the LLM-GE harness:
   python seed_vqc.py --gene-id <id> --out-dir <dir>
 writes "<obj1>, <obj2>" to <out_dir>/<gene_id>_results.txt, matching
 run_improved.py check4results(). Both objectives are MINIMIZED:
-  obj1 = validation cross-entropy   (task performance)
-  obj2 = weighted gate cost         (two-qubit gates cost 5x, per hardware error rates)
+    obj1 = validation classification error   (task performance)
+    obj2 = plain gate count                  (circuit complexity)
 A crash, an invalid circuit, or a missing file leaves the harness to assign
 INVALID_FITNESS_MAX, which is the intended failure path - do not catch broadly
 and report a fake score.
@@ -29,9 +29,10 @@ import time
 import numpy as np
 from scipy.optimize import minimize
 
-from sklearn.datasets import load_iris
+from sklearn.datasets import load_breast_cancer
+from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 from qiskit import QuantumCircuit
 from qiskit.circuit import ParameterVector, Parameter
@@ -42,9 +43,9 @@ import random
 import itertools
 
 SEED = 42
-N_QUBITS = 4
-N_CLASSES = 3
-READOUT = [0, 1]          # ceil(log2(3)) = 2, EXAQC's readout sizing
+N_QUBITS = 8
+N_CLASSES = 2
+READOUT = [0]             # one readout qubit represents the two classes
 TWO_QUBIT_COST = 5.0      # two-qubit error rates are ~an order of magnitude worse
 MAX_GATE_COST = 500.0     # cost ceiling; runaway circuits are not interesting
 
@@ -56,12 +57,19 @@ def load_data():
     every number recorded before evolution existed. Validation is carved out of
     the training portion, so nothing about the test set moves.
     """
-    X, y = load_iris(return_X_y=True)
+    X, y = load_breast_cancer(return_X_y=True)
     X_tr_full, X_te, y_tr_full, y_te = train_test_split(
         X, y, test_size=0.3, random_state=SEED, stratify=y)
     X_tr, X_va, y_tr, y_va = train_test_split(
-        X_tr_full, y_tr_full, test_size=0.25, random_state=SEED, stratify=y_tr_full)
+        X_tr_full, y_tr_full, test_size=0.25, random_state=SEED,
+        stratify=y_tr_full)
 
+    standardizer = StandardScaler().fit(X_tr)
+    X_tr, X_va, X_te = (standardizer.transform(values)
+                        for values in (X_tr, X_va, X_te))
+    reducer = PCA(n_components=N_QUBITS, random_state=SEED).fit(X_tr)
+    X_tr, X_va, X_te = (reducer.transform(values)
+                        for values in (X_tr, X_va, X_te))
     scaler = MinMaxScaler(feature_range=(0.0, np.pi)).fit(X_tr)
     return (scaler.transform(X_tr), scaler.transform(X_va), scaler.transform(X_te),
             y_tr, y_va, y_te)
@@ -97,10 +105,17 @@ _PASSES = 0                     # forward() calls made while training
 _PASS_LIMIT = None              # set in main() once the training set size is known
 _COUNTING = False               # only training counts, scoring afterwards does not
 _BEST = [float("inf"), None]    # best (training loss, weights) seen while training
+EARLY_STOP_PATIENCE = int(os.getenv("QISKIT_EARLY_STOP_PATIENCE", "18"))
+EARLY_STOP_MIN_DELTA = 1e-4
+_TRAINING_CURVE = []
 
 
 class BudgetSpent(Exception):
     """Raised inside forward() when an individual has used its training budget."""
+
+
+class ValidationPlateau(Exception):
+    """Raised when validation loss stops improving for the configured patience."""
 
 
 def forward(qc, x_params, w_params, x_vals, w_vals):
@@ -209,25 +224,46 @@ def emit_representations(qc, out_dir, gene_id, arms=("qasm", "ascii", "image")):
 
 
 def main():
+    global TRAIN_BUDGET_EVALS
     ap = argparse.ArgumentParser()
     ap.add_argument("--gene-id", default="seed")
     ap.add_argument("--out-dir", default="results")
     ap.add_argument("--repr", default="qasm,ascii,image",
                     help="H2 arms to emit; empty string to skip")
+    ap.add_argument("--optimizer", choices=("cobyla", "spsa"),
+                    default=os.getenv("QISKIT_WEIGHT_OPTIMIZER", "cobyla"))
+    ap.add_argument("--initial-weights", default=None,
+                    help="Optional JSON metrics file or list of inherited angles")
+    ap.add_argument("--train-budget", type=int, default=TRAIN_BUDGET_EVALS,
+                    help="Maximum training-set passes for this individual")
     args = ap.parse_args()
 
     t0 = time.perf_counter()
+    if args.train_budget < 1:
+        ap.error("--train-budget must be positive")
+    TRAIN_BUDGET_EVALS = args.train_budget
     X_tr, X_va, X_te, y_tr, y_va, y_te = load_data()
 
     qc, xp, wp = build_circuit()
     if len(wp) == 0:
         raise ValueError("circuit has no trainable parameters")
 
-    global _COUNTING, _PASS_LIMIT
+    global _COUNTING, _PASS_LIMIT, _PASSES, _BEST
+    _PASSES = 0
+    _BEST = [float("inf"), None]
+    _TRAINING_CURVE.clear()
     _PASS_LIMIT = TRAIN_BUDGET_EVALS * len(X_tr)
     _COUNTING = True
+    initial_weights = None
+    if args.initial_weights:
+        with open(args.initial_weights, encoding="utf-8") as file:
+            initial_weights = json.load(file)
+        if isinstance(initial_weights, dict):
+            initial_weights = initial_weights["trained_weights"]
     try:
-        w = train_angles(qc, xp, wp, X_tr, y_tr)
+        w = train_angles(qc, xp, wp, X_tr, y_tr, X_va, y_va,
+                         initial_weights=initial_weights,
+                         optimizer=args.optimizer)
     except BudgetSpent:
         if _BEST[1] is None:
             raise                      # trained without using cross_entropy: no angles to keep
@@ -235,12 +271,8 @@ def main():
     finally:
         _COUNTING = False
 
-    # Both objectives MINIMIZE and both are what EXAQC's Table 1 reports: accuracy
-    # (as its error, so lower is better) and a plain gate count. Accuracy is scored
-    # on VALIDATION, never test - EXAQC reports test accuracy but we only touch test
-    # once, at the end. Validation is 27 samples, so obj1 moves in steps of 1/27 and
-    # ties are expected; the cross-entropy rides along as a third value so we can see
-    # how much resolution we are giving up.
+    # Both objectives MINIMIZE: validation classification error and plain gate
+    # count. Test data is held out and never used during selection.
     val_acc = accuracy(qc, xp, wp, w, X_va, y_va)
     obj1 = 1.0 - val_acc
     obj2 = min(gate_count(qc), MAX_GATE_COST)
@@ -277,6 +309,9 @@ def main():
         "n_qubits": qc.num_qubits, "n_params": len(wp),
         "train_passes": _PASSES, "train_evals": _PASSES / max(len(X_tr), 1),
         "budget_evals": TRAIN_BUDGET_EVALS, "budget_spent": _PASSES >= (_PASS_LIMIT or 0),
+        "optimizer": args.optimizer,
+        "trained_weights": np.asarray(w, dtype=float).tolist(),
+        "training_curve": _TRAINING_CURVE,
         "dead_rotations": dead, "rotations": rotations,
         "seconds": time.perf_counter() - t0,
     }
@@ -356,18 +391,83 @@ def readout_probabilities(probs):
 # --OPTION--
 # Training the angles. COBYLA is gradient-free and cheap; Adam via
 # qiskit-machine-learning + TorchConnector is the EXAQC-faithful alternative.
-MAX_ITER = 178   # 178 is where the loss is within 1% of its final value
+MAX_ITER = 178   # shared upper bound; the protected sample-evaluation budget is authoritative
 
-def train_angles(qc, x_params, w_params, X, y):
+def local_weight_search(objective, initial_weights, max_steps, callback=None,
+                        learning_rate=0.12, perturbation=0.1):
+    """Warm-started SPSA: two directional probes per gradient estimate."""
     rng = np.random.default_rng(SEED)
-    w0 = rng.uniform(0, 2 * np.pi, len(w_params))
+    weights = np.asarray(initial_weights, dtype=float).copy()
+    for step in range(max_steps):
+        direction = rng.choice((-1.0, 1.0), size=weights.size)
+        radius = perturbation / (step + 1) ** 0.101
+        plus = objective(weights + radius * direction)
+        minus = objective(weights - radius * direction)
+        gradient = ((plus - minus) / (2.0 * radius)) * direction
+        rate = learning_rate / (step + 1) ** 0.602
+        weights = np.mod(weights - rate * gradient, 2.0 * np.pi)
+        if callback is not None:
+            callback(weights)
+    return weights
 
-    def objective(w):
-        return cross_entropy(qc, x_params, w_params, w, X, y)
 
-    res = minimize(objective, w0, method="COBYLA",
-                   options={"maxiter": MAX_ITER, "disp": False})
-    return res.x
+def train_angles(qc, x_params, w_params, X, y, X_val=None, y_val=None,
+                 initial_weights=None, optimizer="cobyla"):
+    rng = np.random.default_rng(SEED)
+    weights = (rng.uniform(0, 2 * np.pi, len(w_params))
+               if initial_weights is None else np.asarray(initial_weights, dtype=float))
+    if weights.shape != (len(w_params),):
+        raise ValueError(f"expected {len(w_params)} initial angles, got {weights.shape}")
+
+    def objective(values):
+        return cross_entropy(qc, x_params, w_params, values, X, y)
+
+    best_validation = [float("inf"), None]
+    stale_steps = [0]
+
+    def monitor(values):
+        global _COUNTING
+        if X_val is None or y_val is None:
+            return
+        was_counting = _COUNTING
+        _COUNTING = False
+        try:
+            validation_loss = cross_entropy(qc, x_params, w_params, values, X_val, y_val)
+        finally:
+            _COUNTING = was_counting
+        _TRAINING_CURVE.append({
+            "step": len(_TRAINING_CURVE) + 1,
+            "train_evals": _PASSES / max(len(X), 1),
+            "best_train_loss": _BEST[0],
+            "validation_cross_entropy": float(validation_loss),
+        })
+        if validation_loss < best_validation[0] - EARLY_STOP_MIN_DELTA:
+            best_validation[:] = [float(validation_loss), np.asarray(values).copy()]
+            stale_steps[0] = 0
+        else:
+            stale_steps[0] += 1
+            if EARLY_STOP_PATIENCE > 0 and stale_steps[0] >= EARLY_STOP_PATIENCE:
+                raise ValidationPlateau
+
+    try:
+        if optimizer == "spsa":
+            local_weight_search(
+                objective, weights, max_steps=max(1, TRAIN_BUDGET_EVALS // 2),
+                callback=monitor,
+            )
+        elif optimizer == "cobyla":
+            minimize(objective, weights, method="COBYLA", callback=monitor,
+                     options={"maxiter": min(MAX_ITER, TRAIN_BUDGET_EVALS), "disp": False})
+        else:
+            raise ValueError(f"unsupported weight optimizer: {optimizer}")
+    except (BudgetSpent, ValidationPlateau):
+        pass
+
+    if best_validation[1] is not None:
+        return best_validation[1]
+    if _BEST[1] is not None:
+        return _BEST[1]
+    return weights
 
 
 # -- NOTE --

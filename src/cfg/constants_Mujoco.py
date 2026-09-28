@@ -13,7 +13,7 @@ DATA_PATH = "./cifar10"
 PACE_ICE = True
 RUNLINE_AMP = ""
 #: Location where the current seed repo resides
-SOTA_ROOT = os.path.join(ROOT_DIR, 'sota/MujocoRL')
+SOTA_ROOT = os.path.join(ROOT_DIR, 'sota/QuantumVQC')
 #: Location where the network architecture for the seed resides
 SEED_NETWORK = os.path.join(SOTA_ROOT, "network.py")
 #: Model basename prefix (used in file naming: network_{gene_id}.py)
@@ -26,7 +26,7 @@ VARIANT_DIR = os.path.join(SOTA_ROOT, "models")
 #slurm output
 SLURM_OUTPUT_PATH = "run_job_outputs/"
 #: The training/evaluation script for RL (relative path for cluster compatibility)
-TRAIN_FILE = "sota/MujocoRL/train_rl.py"
+TRAIN_FILE = "sota/QuantumVQC/train.py"
 ISLAND_TEMP_SCRIPT = os.path.join("src", "island_temp_script_{ISLAND_NUM}.sh")
 #: Dedicated uv project used only for Mujoco RL evaluation jobs (relative path for cluster)
 MUJOCO_EVAL_PROJECT_DIR = "sota/MujocoRL/eval_env"
@@ -36,7 +36,7 @@ MUJOCO_EVAL_EPISODES = int(os.getenv("MUJOCO_EVAL_EPISODES", "10"))
 MUJOCO_EVAL_MAX_STEPS = int(os.getenv("MUJOCO_EVAL_MAX_STEPS", "1000"))
 
 #: Output directory for intermediate generation data
-OUTPUT_DIR = "mujoco_rl_output"
+OUTPUT_DIR = "quantum_vqc_output"
 PORT = 8169
 
 CLUSTER = "pace-ice"
@@ -62,10 +62,10 @@ HOSTNAME_DIR = os.path.join(ROOT_DIR, "hostname.log")
 
 # Multi-island settings used by islands_wrapper.py.
 GLOBAL_DATA_PATH = "global_data"
-DEFAULT_PROMPT_GROUP = "Mujoco/Normal"
+DEFAULT_PROMPT_GROUP = "QuantumVQC/Normal"
 PROMPT_GROUP_TEMPLATE = "templates/{prompt_group}/*.txt"
 PROMPTS = f"templates/{DEFAULT_PROMPT_GROUP}/*.txt"
-CONSTANT_RULES_PATH = "templates/Mujoco/ConstantRules.txt"
+CONSTANT_RULES_PATH = "templates/QuantumVQC/ConstantRules.txt"
 
 SLURM_MIXT_INPUT_X = SEED_NETWORK
 SLURM_MIXT_INPUT_Y = os.path.join(SOTA_ROOT, "models/Menghao/network_x.py")
@@ -75,10 +75,10 @@ SLURM_MIXT_TEMPERATURE = 0.1
 SLURM_MIXT_APPLY_QUALITY_CONTROL = True
 SLURM_MIXT_BIT = 8
 
-ISLAND_CONTROLLER_RUN_NAME = "mujoco_islands_run"
+ISLAND_CONTROLLER_RUN_NAME = "quantum_vqc_islands_run"
 ISLAND_CONTROLLER_NUM_ISLANDS = 1
 ISLAND_CONTROLLER_LLMS = "llama3"
-ISLAND_CONTROLLER_PROMPT_GROUPS = "Mujoco/Normal"
+ISLAND_CONTROLLER_PROMPT_GROUPS = "QuantumVQC/Normal"
 
 QC_CHECK_BOOL = False
 HUGGING_FACE_BOOL = False
@@ -121,17 +121,11 @@ FORBIDDEN_PATTERNS = [
         ("shared_net", "uses removed/unstable SB3 MlpExtractor internals"),
     ]
 #: Python run command (uses uv for dependency management)
-UV_PYTHON = f"env -u VIRTUAL_ENV uv run --isolated --project {MUJOCO_EVAL_PROJECT_DIR} python"
+UV_PYTHON = "env -u VIRTUAL_ENV uv run --project . python"
 
-# resolves to {MODEL}_{gene_id}; train_rl.py expects models.network_<gene_id>
+# resolves to {MODEL}_{gene_id}; the QuantumVQC adapter imports this variant.
 RUNLINE_TMP = "{}_{}"
-EVAL_RUNLINE = (
-    f"{UV_PYTHON} {{}} "
-    "-network models.{} "
-    f"-timesteps {MUJOCO_EVAL_TIMESTEPS} "
-    f"-eval_episodes {MUJOCO_EVAL_EPISODES} "
-    f"-eval_max_steps {MUJOCO_EVAL_MAX_STEPS}"
-)
+EVAL_RUNLINE = f"{UV_PYTHON} {{}} -network models.{{}}"
 EVAL_NO_PROGRESS_TIMEOUT_SECONDS = int(os.getenv("LLMGE_EVAL_NO_PROGRESS_TIMEOUT_SECONDS", str(40 * 60)))
 
 #: LLM GPU constraint string for SLURM
@@ -190,7 +184,7 @@ export HUGGINGFACE_HUB_TOKEN="${{HF_TOKEN}}"
 Evolution Constants/Params
 """
 #: 2-objective setup: maximize reward, minimize parameter count.
-FITNESS_WEIGHTS = (1.0, -1.0)
+FITNESS_WEIGHTS = (-1.0, -1.0)
 INVALID_FITNESS_MAX = tuple([float(x * np.inf * -1) for x in FITNESS_WEIGHTS])
 #: A unique placeholder value used before fitness is evaluated
 PLACEHOLDER_FITNESS = tuple([int(x * 9999999999 * -1) for x in FITNESS_WEIGHTS])

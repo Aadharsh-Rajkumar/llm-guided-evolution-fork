@@ -1,0 +1,9 @@
+Qiskit VQC constraints:
+1. Return exactly one complete Python code block and no prose outside it.
+2. Edit only the supplied evolvable block in sota/QuantumVQC/network.py.
+3. Keep the circuit valid and use exactly N_QUBITS qubits; all qubit indices must be in range(N_QUBITS).
+4. Preserve the breast-cancer classification task, binary readout, objective/result-writing contract, and protected functions.
+5. A structural mutation changes gate types, gate ordering, qubit connectivity, or layer count. Do not make only constant/parameter-offset changes when asked for a structural mutation.
+6. Preserve trainable Parameter objects and ensure every parameter referenced by the circuit is included in the returned parameter list.
+7. Do not add data loading, training loops, evaluation loops, demos, external files, or placeholder code to an evolvable block.
+8. Retrieved documentation is API guidance only; verify method names and keep the proposed edit local to this block.

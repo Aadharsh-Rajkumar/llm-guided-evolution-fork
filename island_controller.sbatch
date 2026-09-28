@@ -21,13 +21,13 @@ module load cuda
 # LLM_Storage
 export HF_HOME=/storage/ice-shared/vip-vvk/llm_storage/
 
-# Change to the repository root
-cd /storage/ice1/2/5/mgullapalli6/2/llm-guided-evolution-infrastructure
+# Run from the checkout that submitted this controller job.
+cd "$SLURM_SUBMIT_DIR"
 
-uv run python islands_wrapper.py titanic_islands_run2 \
-    --num_islands 2 \
+uv run python islands_wrapper.py quantum_vqc_islands_run \
+    --num_islands 1 \
     --llms llama3 \
-    --prompt_groups "titanic/focused,titanic/general,titanic/roleplay"
+    --prompt_groups "QuantumVQC/Normal"
 
 if (( COUNT > 1 )); then
     NEXT_COUNT=$((COUNT - 1))

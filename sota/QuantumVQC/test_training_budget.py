@@ -12,7 +12,7 @@ import json, os, pathlib, re, shutil, subprocess, sys, tempfile
 HERE = pathlib.Path(__file__).parent
 SEED = (HERE / "seed_vqc.py").read_text()
 PY = sys.executable
-BUDGET = int(re.search(r"TRAIN_BUDGET_EVALS = (\d+)", SEED).group(1))
+BUDGET = 10
 
 BLOCK = SEED[SEED.rindex("# --OPTION--"):]          # the training block
 
@@ -23,7 +23,7 @@ VARIANTS = {
 MAX_ITER = 5000
 from scipy.optimize import differential_evolution
 
-def train_angles(qc, x_params, w_params, X, y):
+def train_angles(qc, x_params, w_params, X, y, *args, **kwargs):
     rng = np.random.default_rng(SEED)
     w0 = rng.uniform(0, 2 * np.pi, len(w_params))
 
@@ -48,7 +48,8 @@ with tempfile.TemporaryDirectory() as tmp:
         f = pathlib.Path(tmp) / f"v_{name}.py"
         f.write_text(src)
         out = pathlib.Path(tmp) / name
-        r = subprocess.run([PY, str(f), "--gene-id", name, "--out-dir", str(out), "--repr", ""],
+        r = subprocess.run([PY, str(f), "--gene-id", name, "--out-dir", str(out), "--repr", "",
+                    "--train-budget", str(BUDGET)],
                            capture_output=True, text=True, timeout=1800)
         mfile = out / f"{name}_metrics.json"
         if r.returncode != 0 or not mfile.exists():

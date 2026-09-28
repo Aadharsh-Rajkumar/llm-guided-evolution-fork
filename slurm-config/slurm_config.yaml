@@ -1,4 +1,4 @@
-gpu_selection: H200
+gpu_selection: H100
 islands_bash_script: '#!/bin/bash
 
     #SBATCH --job-name=Islands_script

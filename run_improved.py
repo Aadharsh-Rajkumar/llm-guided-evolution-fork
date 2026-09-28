@@ -160,6 +160,22 @@ def generate_template(PROB_EOT, GEN_COUNT, TOP_N_GENES, SOTA_ROOT, SEED_NETWORK,
         with open(rules_path, 'r') as file:
             rules_txt = file.read()
         template_txt = f'{template_txt}\n{rules_txt}'
+        if os.path.basename(SOTA_ROOT) == "QuantumVQC":
+            from src.qiskit_rag import retrieve_context
+
+            query = (
+                "Qiskit variational quantum circuit structural mutation. "
+                "Change data encoding, trainable RY/RZ rotations, CNOT or "
+                "other entanglement topology while preserving qubit count. "
+                + template_txt.replace("{}", "")
+            )
+            retrieved = retrieve_context(query, top_k=3)
+            if retrieved:
+                template_txt += (
+                    "\n\nRetrieved Qiskit API guidance (use as references, "
+                    "not as code to copy):\n" + retrieved
+                )
+                print("\t‣ Retrieved Qiskit API context for mutation prompt")
     return template_txt, mute_type
 
 def write_bash_script(llm_model,
@@ -532,19 +548,16 @@ def check4results(gene_id):
                 
     job_done = check4error(gene_id)
     if job_done is True:
-        out_dir = os.path.join(OUTPUT_DIR, str(GENERATION))
-        # The job saves the model results to a file f'{gene_id}_results.csv'
-        # results_path = os.path.join(out_dir, f'{gene_id}_results.csv')
-        results_path = f'{SOTA_ROOT}/results/{gene_id}_results.csv'
-        with open(results_path, 'r') as file:
-            lines = file.readlines()
-        # Skip header line (first line) and parse data line (second line)
-        results = lines[-1].strip() if len(lines) > 1 else lines[0].strip()
-        results = results.split(',')
-        fitness = [float(r.strip()) for r in results]
-        # TODO: get all features later
-        fitness = [fitness[i] for i in range(len(FITNESS_WEIGHTS))]
-        fitness = tuple(fitness)
+        results_path = f'{SOTA_ROOT}/results/{gene_id}_results.txt'
+        try:
+            with open(results_path, 'r', encoding='utf-8') as file:
+                results = [float(value.strip()) for value in file.read().split(',')]
+            fitness = tuple(results[:len(FITNESS_WEIGHTS)])
+            if len(fitness) != len(FITNESS_WEIGHTS) or not np.isfinite(fitness).all():
+                raise ValueError(f"invalid fitness values: {fitness}")
+        except (OSError, ValueError) as error:
+            print(f"\t☠ No usable results for {gene_id}: {error}", flush=True)
+            fitness = INVALID_FITNESS_MAX
         
         GLOBAL_DATA[gene_id]['status'] = 'completed'
         GLOBAL_DATA[gene_id]['fitness'] = fitness
