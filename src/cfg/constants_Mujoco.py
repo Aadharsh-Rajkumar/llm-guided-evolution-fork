@@ -120,8 +120,15 @@ FORBIDDEN_PATTERNS = [
         ("self.mlp_extractor.", "accesses unstable SB3 mlp_extractor internals"),
         ("shared_net", "uses removed/unstable SB3 MlpExtractor internals"),
     ]
+#: Qiskit RAG: append BM25-retrieved Qiskit API notes to every mutation prompt.
+#: LLMGE_QISKIT_RAG=0 gives the no-RAG control arm of the RAG ablation.
+QISKIT_RAG = os.getenv("LLMGE_QISKIT_RAG", "1") == "1"
+#: Lamarckian weight inheritance: a mutated child warm-starts its first training
+#: start from its parent's trained angles when the parameter count matches.
+INHERIT_WEIGHTS = os.getenv("LLMGE_INHERIT_WEIGHTS", "0") == "1"
 #: Python run command (uses uv for dependency management)
-UV_PYTHON = "env -u VIRTUAL_ENV uv run --project . python"
+#: Eval jobs call the synced project venv directly: no per-job uv lock/sync step.
+UV_PYTHON = f"env -u VIRTUAL_ENV {os.path.join(ROOT_DIR, '.venv', 'bin', 'python')}"
 
 # resolves to {MODEL}_{gene_id}; the QuantumVQC adapter imports this variant.
 RUNLINE_TMP = "{}_{}"
@@ -192,15 +199,16 @@ NUM_EOT_ELITES = 1
 GENERATION = 0
 PROB_QC = 0.0
 PROB_EOT = 0.0  # Disable EoT for initial RL runs (needs prior elite genes)
-num_generations = 30  # Number of generations
-start_population_size = 32  # Starting population size
-population_size = 32  # Population size each generation
+num_generations = int(os.getenv("LLMGE_NUM_GENERATIONS", "30"))  # Number of generations
+start_population_size = int(os.getenv("LLMGE_START_POPULATION", "32"))  # Starting population size
+population_size = int(os.getenv("LLMGE_POPULATION", "32"))  # must be a multiple of 4 for selTournamentDCD
 crossover_probability = 0.35  # Probability of mating two individuals
 mutation_probability = 0.8  # Probability of mutating an individual
 num_elites = 8
 hof_size = 100
 max_gen_attempts = 5
-migration_gen = 5
+#: 0 = run all generations in one process (no island migration stop every N gens)
+migration_gen = int(os.getenv("LLMGE_MIGRATION_GEN", "5"))
 """
 Misc. Non-sense
 """

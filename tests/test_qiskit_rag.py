@@ -9,7 +9,9 @@ from src.qiskit_rag import retrieve, retrieve_context
 def test_structural_query_retrieves_gate_topology_guidance():
     results = retrieve("change CNOT entanglement topology and add a CZ gate", top_k=2)
     assert results
-    assert "structural_gates.md" in results[0].source
+    # two_qubit_gates.md (added 2026-10-08) is the more specific match for a CZ query;
+    # either gate-topology note is a correct top hit.
+    assert results[0].source in ("structural_gates.md", "two_qubit_gates.md")
     assert "cx" in results[0].text.lower()
 
 
