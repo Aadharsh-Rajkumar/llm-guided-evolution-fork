@@ -56,8 +56,12 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
                                             top_p, llm_model, temperature)
     
-    if not code_from_llm:
-        code_from_llm = txt2llm
+    if not code_from_llm or code_from_llm.strip() == "ERROR":
+        # Never splice the prompt (the old fallback) or the "ERROR" marker into a
+        # variant: both are guaranteed SyntaxError/NameError deaths that look like
+        # bad LLM code. Keep the parent's block; the child evaluates as a clone.
+        print("LLM CODE EXTRACTION FAILED. Falling back to parent chunk.", flush=True)
+        code_from_llm = code2llm.strip()
     else:
         valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
         if not valid_code:

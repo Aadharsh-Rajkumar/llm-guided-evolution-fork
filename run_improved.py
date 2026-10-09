@@ -90,6 +90,8 @@ def update_ancestry(gene_id_child, gene_id_parent, ancestry, mutation_type=None,
         Ancestry dictionary
     """
     # Common part for both functionalities
+    if gene_id_parent not in ancestry:  # e.g. a gene made while GEN_COUNT was -1
+        ancestry[gene_id_parent] = {'GENES': [gene_id_parent], 'MUTATE_TYPE': ["UNKNOWN"]}
     ancestry[gene_id_child] = copy.deepcopy(ancestry[gene_id_parent])
     # Handle the specifics for either part 1 or part 2
     if gene_id_parent2 is None:
@@ -160,7 +162,7 @@ def generate_template(PROB_EOT, GEN_COUNT, TOP_N_GENES, SOTA_ROOT, SEED_NETWORK,
         with open(rules_path, 'r') as file:
             rules_txt = file.read()
         template_txt = f'{template_txt}\n{rules_txt}'
-        if os.path.basename(SOTA_ROOT) == "QuantumVQC":
+        if os.path.basename(SOTA_ROOT) == "QuantumVQC" and QISKIT_RAG:
             from src.qiskit_rag import retrieve_context
 
             query = (
@@ -453,6 +455,11 @@ def submit_run(gene_id):
     def write_bash_script_py(gene_id, train_file=f'{TRAIN_FILE}'):
         model_file_override = RUNLINE_TMP.format(MODEL, gene_id) 
         python_runline = EVAL_RUNLINE.format(train_file, model_file_override, VARIANT_DIR=VARIANT_DIR)
+        if INHERIT_WEIGHTS:
+            lineage = GLOBAL_DATA_ANCESTRY.get(gene_id, {}).get('GENES', [])
+            parents = [g for g in lineage[:-1] if not str(g).startswith('P:')]
+            if parents and parents[-1] != MODEL:
+                python_runline += f" -parent {parents[-1]}"
         config = load_yaml()
         bash_script_content = fill_template_slots(config['python_bash_script'], python_runline)
         return bash_script_content
@@ -1128,6 +1135,9 @@ if __name__ == "__main__":
             check_and_update_fitness(population)
             population = [ind for ind in population if ind.fitness.values != INVALID_FITNESS_MAX]
             box_print("CURRENT POPULATION SIZE:", len(population))
+        # The regeneration loop sets GEN_COUNT = -1 for creation; restore it, or every
+        # mutation this generation skips update_ancestry and the next crossover KeyErrors.
+        GEN_COUNT = gen
 
         print_population(population, GLOBAL_DATA)
         # Select the next generation's parents

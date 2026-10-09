@@ -29,15 +29,32 @@ def retrieve_base_code(idx):
     return split_file(base_network)[1:][idx].strip()
 
 def clean_code_from_llm(code_from_llm):
-    """Cleans the code received from LLM."""
+    """Cleans the code received from LLM.
+
+    Returns the longest non-empty fenced segment. Taking only the first segment
+    lost real answers: Llama-3.3 regularly opens with an EMPTY fence and then the
+    code ("```python\n```import numpy ..."), so the first segment is "" (2026-10-08).
+    Callers must treat "ERROR" as "no code" and never splice it into a variant.
+    """
     try:
-        # Extract and clean code assuming it is enclosed in triple backticks
-        return '\n'.join(code_from_llm.strip().split("```")[1].split('\n')[1:]).strip()
-    except (IndexError, AttributeError) as e:
-        # Print an error message if the code extraction fails
+        segments = code_from_llm.strip().split("```")[1:]
+    except AttributeError:
+        segments = []
+    candidates = []
+    for k, seg in enumerate(segments):
+        lines = seg.split('\n')
+        # drop a language tag ("python", "py") on the fence line
+        if lines and re.fullmatch(r"\s*[A-Za-z0-9_+-]*\s*", lines[0]):
+            lines = lines[1:]
+        body = '\n'.join(lines).strip()
+        if body:
+            # Segments at even k sit inside a fence pair; prefer them over the
+            # text between fences, which is usually prose.
+            candidates.append((k % 2 == 0, len(body), body))
+    if not candidates:
         print("Runtime Error: No code was generated or the format is incorrect.")
-        return "ERROR"  # Return ERROR
-        #return ""
+        return "ERROR"
+    return max(candidates)[2]
 
 def get_llm_code_generator(llm_model):
     # Prefer the local uvicorn-hosted model when configured

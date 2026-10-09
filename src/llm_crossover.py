@@ -59,14 +59,20 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
     code_from_llm = generate_augmented_code(txt2llm, augment_idx, apply_quality_control,
                                             top_p, llm_model, temperature)
     
-    if not code_from_llm:
-        code_from_llm = txt2llm
+    if not code_from_llm or code_from_llm.strip() == "ERROR":
+        # Same as llm_mutation.py: keep parent X's block rather than splicing the
+        # prompt or the "ERROR" marker into the child.
+        print("LLM CODE EXTRACTION FAILED. Falling back to parent chunk.", flush=True)
+        code_from_llm = parts_x[augment_idx + 1].strip()
     
     # Insert note if present
-    temp_txt = parts_x[augment_idx]
+    # `parts` was built from parts_x[1:], so augment_idx 0 is block 1. Indexing
+    # parts_x with augment_idx wrote the merge one slot early: block 1 overwrote the
+    # protected header and every other merge replaced its neighbour.
+    temp_txt = parts_x[augment_idx + 1]
     note_txt = extract_note(temp_txt)
     # Update the part with augmented code
-    parts_x[augment_idx] = f"\n{note_txt}{code_from_llm}\n"
+    parts_x[augment_idx + 1] = f"\n{note_txt}{code_from_llm}\n"
     # Prepare and write the augmented code to output file
     write_augmented_code(output_filename, parts_x, parts_y)
     box_print(f"Python code saved to {os.path.basename(output_filename)}", print_bbox_len=120, new_line_end=False)
