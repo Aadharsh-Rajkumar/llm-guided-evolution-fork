@@ -4,6 +4,8 @@
 #SBATCH --nodes=1
 #SBATCH -G 2
 #SBATCH -C "H100"
+# GPUs on these nodes reported "busy or unavailable" on 2026-10-03 (quantum-seed run 6060968).
+#SBATCH --exclude=atl1-1-03-010-10-0,atl1-1-03-011-13-0,atl1-1-03-011-18-0
 #SBATCH --mem 160G
 #SBATCH -c 16
 #SBATCH --output=run_job_outputs/server/slurm-%j.out
@@ -27,9 +29,6 @@ export SERVER_HOSTNAME=$(hostname)
 
 HOSTNAME_FILE=$(pwd)"/hostname.log"
 
-# Write hostname to file so tests can find the server
-echo "$SERVER_HOSTNAME" > "$HOSTNAME_FILE"
-echo "Wrote hostname to $HOSTNAME_FILE"
 
 # Log the island controller setting for debugging
 echo "SUBMIT_ISLAND_CONTROLLER=${SUBMIT_ISLAND_CONTROLLER:-<not set>}"
@@ -43,4 +42,16 @@ else
     echo "Skipping island controller submission (SUBMIT_ISLAND_CONTROLLER=${SUBMIT_ISLAND_CONTROLLER})"
 fi
 
-uv run python -m uvicorn server:app --host $SERVER_HOSTNAME --port 8169 --workers 1
+# Publish the hostname only once the model is loaded and answering. A relay server
+# queued to start before this one's 8 h GPU limit (QOSMaxGRESMinutesPerJob) then
+# takes over without clients ever being pointed at a server that is still loading:
+#     sbatch --begin=now+7hours --export=ALL,SUBMIT_ISLAND_CONTROLLER=0 server.sh
+uv run python -m uvicorn server:app --host $SERVER_HOSTNAME --port 8169 --workers 1 &
+SERVER_PID=$!
+until curl -sf "http://$SERVER_HOSTNAME:8169/" > /dev/null; do
+    if ! kill -0 $SERVER_PID 2>/dev/null; then echo "server exited before becoming ready"; exit 1; fi
+    sleep 15
+done
+echo "$SERVER_HOSTNAME" > "$HOSTNAME_FILE"
+echo "Server ready; wrote hostname to $HOSTNAME_FILE"
+wait $SERVER_PID
