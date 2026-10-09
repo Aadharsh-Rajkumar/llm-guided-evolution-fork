@@ -2,8 +2,8 @@
 
 Reads the fitness files an evolution run leaves behind, works out which
 generation each individual first appeared in from the orchestrator log, and
-draws the front. Both objectives are MINIMISED: obj1 = validation
-cross-entropy, obj2 = hardware-weighted gate cost.
+draws the front. Both objectives are MINIMISED: obj1 = validation error
+(1 - accuracy, averaged over N_STARTS trainings), obj2 = plain gate count.
 
   python tools/pareto_report.py --results <dir> --log <file> --out <dir>
 """
@@ -14,7 +14,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 
-SEED_OBJ = (0.14814814814814814, 28.0)   # the seed on PACE: val error 0.1481, 28 gates
+SEED_OBJ = (0.15087719298245617, 56.0)   # seed since 2026-10-08: 8q breast cancer, 5-start mean val error, 56 gates
 TEAL, PURPLE, LTEAL, GRAY = "#418faf", "#4c4a86", "#7fc5d4", "#9ba0a5"
 NAVY, MUTED, ACC = "#2d2a54", "#6e6f7b", "#b5504a"
 
