@@ -39,6 +39,8 @@ def main():
     ap.add_argument("-val_r", type=float, default=None)
     ap.add_argument("-epoch", type=int, default=None)
     ap.add_argument("-amp", action="store_true")
+    ap.add_argument("-parent", default=None,
+                    help="parent gene id; its trained angles warm-start the first training start")
     args, unknown = ap.parse_known_args()
     if unknown:
         print(f"[train.py] ignoring unused args: {unknown}")
@@ -50,8 +52,12 @@ def main():
     module = importlib.import_module(args.network)
 
     # The variant's own CLI does the work; hand it the gene id and output dir.
-    sys.argv = ["network", "--gene-id", gene_id,
-                "--out-dir", os.path.join(HERE, "results")]
+    out_dir = os.path.join(HERE, "results")
+    sys.argv = ["network", "--gene-id", gene_id, "--out-dir", out_dir]
+    if args.parent:
+        parent_metrics = os.path.join(out_dir, f"{args.parent}_metrics.json")
+        if os.path.exists(parent_metrics):
+            sys.argv += ["--initial-weights", parent_metrics]
     module.main()
 
     # check_contents_for_error() in run_improved.py treats a job as finished only
