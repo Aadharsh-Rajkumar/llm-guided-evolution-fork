@@ -13,10 +13,14 @@ from utils.print_utils import box_print
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, extract_note, generate_augmented_code, 
                        clean_code_from_llm, retrieve_base_code)
+from qiskit_rag import build_rag_section, recent_failures
+import json
+from pathlib import Path
 
 
 def augment_network(input_filename_x, input_filename_y, output_filename,
-                    top_p=0.15, llm_model=LLM_QWEN, temperature=0.1, apply_quality_control=False):
+                    top_p=0.15, llm_model=LLM_QWEN, temperature=0.1, apply_quality_control=False,
+                    qiskit_rag=False, failure_log=None):
     """Augment Python Network Script.
     
     Parameters
@@ -55,6 +59,18 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
 
     # Add code to be augmented
     txt2llm = template_txt.format(x.strip(), y.strip())
+    # Crossover got no notes in the Oct 8 RAG run; it now gets the same per-block
+    # retrieval as a mutation, queried with both parents' versions of the block.
+    rag_sources = []
+    if qiskit_rag:
+        failures = recent_failures(failure_log, augment_idx + 1)
+        rag_txt, rag_sources = build_rag_section(
+            "Combine two Qiskit circuit blocks", f"{x}\n{y}", failures)
+        txt2llm += rag_txt
+        print(f"RAG block {augment_idx + 1}: sources {', '.join(rag_sources)}; "
+              f"{len(failures)} recent error(s) fed back", flush=True)
+    Path(f"{output_filename}.rag.json").write_text(json.dumps(
+        {"op": "crossover", "block": augment_idx + 1, "rag": bool(qiskit_rag), "sources": rag_sources}))
     # Generate augmented code
     code_from_llm = generate_augmented_code(txt2llm, augment_idx, apply_quality_control,
                                             top_p, llm_model, temperature)
@@ -117,6 +133,8 @@ if __name__ == "__main__":
     parser.add_argument('--top_p', type=float, default=0.15, help='Top P value for text generation')
     parser.add_argument('--temperature', type=float, default=0.1, help='Temperature value for text generation')
     parser.add_argument('--apply_quality_control', type=str2bool, default=False, help='Use LLM QC')
+    parser.add_argument('--qiskit_rag', type=str2bool, default=False, help='Append per-block Qiskit RAG notes')
+    parser.add_argument('--failure_log', type=str, default=None, help='JSONL of failed children (RAG error feedback)')
 
     # Parse the arguments
     args = parser.parse_args()
@@ -129,4 +147,6 @@ if __name__ == "__main__":
                     llm_model=args.llm_model,
                     temperature=args.temperature,
                     apply_quality_control=args.apply_quality_control,
+                    qiskit_rag=args.qiskit_rag,
+                    failure_log=args.failure_log,
                    )

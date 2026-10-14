@@ -19,6 +19,8 @@ from utils.print_utils import box_print
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, generate_augmented_code, 
                        extract_note, clean_code_from_llm, retrieve_base_code)
+from qiskit_rag import build_rag_section, recent_failures
+import json
 
 def validate_generated_chunk(code_from_llm):
     """Reject common invalid patterns as defined by config"""
@@ -32,7 +34,8 @@ def validate_generated_chunk(code_from_llm):
         return True, ""
 
 def augment_network(input_filename='network.py', output_filename='network_x.py', template_txt=None,
-                    top_p=0.15, llm_model=LLM_DEEPSEEK, temperature=0.1, apply_quality_control=False):
+                    top_p=0.15, llm_model=LLM_DEEPSEEK, temperature=0.1, apply_quality_control=False,
+                    qiskit_rag=False, failure_log=None):
     
     print(f'Loading {input_filename} code')
     print('Using')
@@ -53,6 +56,18 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     if "{}" not in template_txt:
         raise ValueError(f"Prompt template {fname} must contain a literal {{}} code placeholder")
     txt2llm = template_txt.replace("{}", code2llm.strip(), 1)
+    # Per-mutation retrieval: the query is this block's code + the mutation goal +
+    # the errors recent children of this block died with (see src/qiskit_rag.py).
+    rag_sources = []
+    if qiskit_rag:
+        goal = template_txt.split("```")[0]
+        failures = recent_failures(failure_log, augment_idx)
+        rag_txt, rag_sources = build_rag_section(goal, code2llm, failures)
+        txt2llm += rag_txt
+        print(f"RAG block {augment_idx}: sources {', '.join(rag_sources)}; "
+              f"{len(failures)} recent error(s) fed back", flush=True)
+    Path(f"{output_filename}.rag.json").write_text(json.dumps(
+        {"op": "mutation", "block": augment_idx, "rag": bool(qiskit_rag), "sources": rag_sources}))
     code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
                                             top_p, llm_model, temperature)
     
@@ -96,6 +111,8 @@ if __name__ == "__main__":
     parser.add_argument('--top_p', type=float, default=0.15, help='Top P value for text generation')
     parser.add_argument('--temperature', type=float, default=0.1, help='Temperature value for text generation')
     parser.add_argument('--apply_quality_control', type=str2bool, default=False, help='Use LLM QC')
+    parser.add_argument('--qiskit_rag', type=str2bool, default=False, help='Append per-mutation Qiskit RAG notes')
+    parser.add_argument('--failure_log', type=str, default=None, help='JSONL of failed children (RAG error feedback)')
 
     # Parse the arguments
     args = parser.parse_args()
@@ -109,4 +126,6 @@ if __name__ == "__main__":
                     top_p=args.top_p, 
                     temperature=args.temperature,
                     apply_quality_control=args.apply_quality_control,
+                    qiskit_rag=args.qiskit_rag,
+                    failure_log=args.failure_log,
                    )
