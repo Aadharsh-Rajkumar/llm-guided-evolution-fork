@@ -120,7 +120,8 @@ FORBIDDEN_PATTERNS = [
         ("self.mlp_extractor.", "accesses unstable SB3 mlp_extractor internals"),
         ("shared_net", "uses removed/unstable SB3 MlpExtractor internals"),
     ]
-#: Qiskit RAG: append BM25-retrieved Qiskit API notes to every mutation prompt.
+#: Qiskit RAG: the LLM job appends BM25-retrieved Qiskit notes chosen for the block it
+#: is mutating (plus a pinned API note and recent errors of that block) to its prompt.
 #: LLMGE_QISKIT_RAG=0 gives the no-RAG control arm of the RAG ablation.
 QISKIT_RAG = os.getenv("LLMGE_QISKIT_RAG", "1") == "1"
 #: Lamarckian weight inheritance: a mutated child warm-starts its first training
@@ -204,9 +205,14 @@ start_population_size = int(os.getenv("LLMGE_START_POPULATION", "32"))  # Starti
 population_size = int(os.getenv("LLMGE_POPULATION", "32"))  # must be a multiple of 4 for selTournamentDCD
 crossover_probability = 0.35  # Probability of mating two individuals
 mutation_probability = 0.8  # Probability of mutating an individual
-num_elites = 8
+num_elites = int(os.getenv("LLMGE_NUM_ELITES", "8"))
 hof_size = 100
 max_gen_attempts = 5
+#: Seeds Python/numpy RNGs (selection, pairing, crossover/mutation coin flips, LLM
+#: temperatures) per generation; give both arms of an ablation the same value.
+RANDOM_SEED = int(os.environ["LLMGE_RANDOM_SEED"]) if os.getenv("LLMGE_RANDOM_SEED") else None
+#: Create + evaluate the initial population, checkpoint it as generation 0, and stop.
+INIT_ONLY = os.getenv("LLMGE_INIT_ONLY", "0") == "1"
 #: 0 = run all generations in one process (no island migration stop every N gens)
 migration_gen = int(os.getenv("LLMGE_MIGRATION_GEN", "5"))
 """

@@ -18,6 +18,7 @@ from deap.tools import HallOfFame, ParetoFront
 from functools import partial
 from src.utils.print_utils import print_population, print_scores, box_print, print_job_info
 from src.llm_utils import split_file, retrieve_base_code
+from src.qiskit_rag import last_error
 from src.cfg.constants import *
 from src.cfg import constants
 import glob
@@ -162,23 +163,33 @@ def generate_template(PROB_EOT, GEN_COUNT, TOP_N_GENES, SOTA_ROOT, SEED_NETWORK,
         with open(rules_path, 'r') as file:
             rules_txt = file.read()
         template_txt = f'{template_txt}\n{rules_txt}'
-        if os.path.basename(SOTA_ROOT) == "QuantumVQC" and QISKIT_RAG:
-            from src.qiskit_rag import retrieve_context
-
-            query = (
-                "Qiskit variational quantum circuit structural mutation. "
-                "Change data encoding, trainable RY/RZ rotations, CNOT or "
-                "other entanglement topology while preserving qubit count. "
-                + template_txt.replace("{}", "")
-            )
-            retrieved = retrieve_context(query, top_k=3)
-            if retrieved:
-                template_txt += (
-                    "\n\nRetrieved Qiskit API guidance (use as references, "
-                    "not as code to copy):\n" + retrieved
-                )
-                print("\t‣ Retrieved Qiskit API context for mutation prompt")
+        # Qiskit RAG is no longer appended here: the template is written before the LLM
+        # job picks its code block, so the query could never see the code. The LLM job
+        # retrieves per block instead (src/llm_mutation.py, --qiskit_rag).
     return template_txt, mute_type
+
+def rag_args():
+    """LLM-job flags for per-block Qiskit RAG (QuantumVQC only)."""
+    if os.path.basename(SOTA_ROOT) != "QuantumVQC" or not QISKIT_RAG:
+        return ""
+    return f" --qiskit_rag True --failure_log {FAILURE_LOG}"
+
+
+def record_failure(gene_id, error):
+    """Append a failed child to the run's failure log; the RAG arm feeds these errors
+    back into the next retrieval for the same block. Written in both arms so the
+    failure causes can be compared, but only read when QISKIT_RAG is on."""
+    if not FAILURE_LOG:
+        return
+    sidecar = f'{VARIANT_DIR}/{MODEL}_{gene_id}.py.rag.json'
+    meta = {}
+    if os.path.exists(sidecar):
+        with open(sidecar) as file:
+            meta = json.load(file)
+    with open(FAILURE_LOG, 'a') as file:
+        file.write(json.dumps({'gene': gene_id, 'gen': GEN_COUNT, 'block': meta.get('block'),
+                               'op': meta.get('op'), 'error': error}) + '\n')
+
 
 def write_bash_script(llm_model,
                       job_name,
@@ -214,14 +225,14 @@ def write_bash_script(llm_model,
         with open(file_path, 'w') as file:
             file.write(template_txt)
         temp_text = f'{python_file} {input_filename_x} {output_filename} {file_path} --top_p {top_p} --temperature {temperature}'
-        python_runline = f"uv run python {temp_text} --apply_quality_control '{QC_CHECK_BOOL}' --llm_model {llm_model}"
+        python_runline = f"uv run python {temp_text} --apply_quality_control '{QC_CHECK_BOOL}' --llm_model {llm_model}{rag_args()}"
     elif python_file=='src/llm_crossover.py':
         gene_id_parent2 = fetch_gene(input_filename_y)
         GLOBAL_DATA_ANCESTRY = update_ancestry(gene_id_child, gene_id_parent, GLOBAL_DATA_ANCESTRY, 
                                                 mutation_type=None, gene_id_parent2=gene_id_parent2)
         
         temp_text = f"{python_file} {input_filename_x} {input_filename_y} {output_filename} --top_p {top_p} --temperature {temperature}"
-        python_runline = f"uv run python {temp_text} --apply_quality_control '{QC_CHECK_BOOL}' --llm_model {llm_model}"
+        python_runline = f"uv run python {temp_text} --apply_quality_control '{QC_CHECK_BOOL}' --llm_model {llm_model}{rag_args()}"
     else:
         raise ValueError("Invalid python_file argument")
     config = load_yaml()
@@ -303,6 +314,24 @@ def wait_for_llm_server(timeout=3600, check_interval=10):
         print(f"\t‣ Last readiness error: {last_error}", flush=True)
     return False
 
+SUBMIT_LIMIT_ERRORS = ("QOSMaxSubmitJobPerUserLimit", "AssocMaxSubmitJobLimit")
+
+def run_submit(file_path, wait=30, max_wait=4 * 3600):
+    """sbatch, but wait and retry while the per-user submit cap (50 jobs on coe-ice) is
+    full instead of failing: a refused submission used to make the circuit INVALID,
+    which at population 24 x 2 arms silently cost a large share of every generation."""
+    waited = 0
+    while True:
+        result = subprocess.run([RUN_COMMAND, file_path], capture_output=True, text=True)
+        if result.returncode == 0 or LOCAL or waited >= max_wait or \
+                not any(e in result.stderr for e in SUBMIT_LIMIT_ERRORS):
+            return result
+        if waited == 0:
+            print(f"\t‣ Submit cap reached; retrying every {wait}s", flush=True)
+        time.sleep(wait)
+        waited += wait
+
+
 def submit_bash(file_path, **kwargs):
     """ This should be general for subbing anything and returning:
         successful_sub_flag 
@@ -312,7 +341,7 @@ def submit_bash(file_path, **kwargs):
         return False, None, None
 
     create_bash_file(file_path, **kwargs)
-    result = subprocess.run([RUN_COMMAND, file_path], capture_output=True, text=True)
+    result = run_submit(file_path)
     local_output = None
     if result.returncode == 0 and LOCAL:
         local_output = result.stdout.strip()
@@ -406,11 +435,15 @@ def check4job_completion(job_id, local_output=None, check_interval=60, timeout=3
         time.sleep(check_interval)
         print(f'\t‣ Waiting on check4job_completion LLM job: {job_id} Time: {round(time.time() - start_time)}s Path: {output_file}', flush=True)
         
+_ID_RNG = random.SystemRandom()
+
 def generate_random_string(length=20):
     # Define the characters that can be used in the string
     characters = string.ascii_letters + string.digits
     # Generate a random strconing of specified length
-    random_string = ''.join(random.choice(characters) for i in range(length))
+    # OS entropy, not `random`: arms seeded with the same LLMGE_RANDOM_SEED would
+    # otherwise mint identical gene ids and overwrite each other's shared files.
+    random_string = ''.join(_ID_RNG.choice(characters) for i in range(length))
     random_string = 'xXx'+random_string
     return random_string
     
@@ -476,7 +509,7 @@ def submit_run(gene_id):
         job_id = None
         successful_sub_flag = False
         local_output = None
-        result = subprocess.run([RUN_COMMAND, file_path], capture_output=True, text=True)
+        result = run_submit(file_path)
         if LOCAL:
             local_output = result.stdout.strip() + '\n' + result.stderr.strip()
             print("\t‣ Output:", local_output, flush=True)
@@ -550,6 +583,8 @@ def check4results(gene_id):
                 if state is None:
                     pass
                 else:
+                    if state is False:
+                        record_failure(gene_id, last_error(contents))
                     return state
         return None
                 
@@ -1031,6 +1066,37 @@ def create_population(n, llm_model):
     individual_func = partial(toolbox.individual, llm_model=llm_model)
     return tools.initRepeat(list, individual_func, n)
 
+def seed_rngs(gen):
+    """Same LLMGE_RANDOM_SEED -> same selection/pairing/temperature draws in every arm
+    at every generation (reseeded per generation so a resumed run stays in step)."""
+    if RANDOM_SEED is not None:
+        random.seed(RANDOM_SEED * 1000 + gen)
+        np.random.seed(RANDOM_SEED * 1000 + gen)
+
+
+def top_up(population, llm_model):
+    """Keep only valid individuals and create new ones from the seed until there are at
+    least num_elites. Replaces the old loop that threw the whole population (and the
+    ancestry) away and recreated it from scratch whenever it fell short."""
+    global GEN_COUNT
+    population = [ind for ind in population if ind.fitness.values != INVALID_FITNESS_MAX]
+    saved_gen, attempts = GEN_COUNT, 0
+    while len(population) < num_elites and attempts < max_gen_attempts:
+        attempts += 1
+        need = 2 * (num_elites - len(population))  # ~40-45% of new circuits are valid
+        print(f"ONLY {len(population)} VALID (< {num_elites}); CREATING {need} MORE FROM THE SEED")
+        GEN_COUNT = -1
+        extra = toolbox.population(n=need, llm_model=llm_model)
+        delayed_creation_check(extra)
+        for ind in extra:
+            ind.fitness.values = PLACEHOLDER_FITNESS
+        check_and_update_fitness(extra)
+        population += [ind for ind in extra if ind.fitness.values != INVALID_FITNESS_MAX]
+        box_print("CURRENT POPULATION SIZE:", len(population))
+    GEN_COUNT = saved_gen
+    return population
+
+
 # Define the problem
 creator.create("FitnessMulti", base.Fitness, weights=FITNESS_WEIGHTS)  # Adjust weights as needed
 creator.create("Individual", list, fitness=creator.FitnessMulti, file_id=None)
@@ -1048,6 +1114,7 @@ toolbox.register("select", true_nsga2)
 
 # 40398682
 GEN_COUNT = -1
+FAILURE_LOG = None
 TOP_N_GENES = None
 LINKED_GENES = {}
 GLOBAL_DATA = {}
@@ -1081,6 +1148,9 @@ if __name__ == "__main__":
         print("Error in Island Generation: No LLM specified. Exiting script")
         exit(1)
 
+    os.makedirs(args.global_path, exist_ok=True)
+    FAILURE_LOG = os.path.abspath(os.path.join(args.global_path, "failures.jsonl"))
+
     population_data, start_gen, global_data = load_checkpoint(folder_name=args.checkpoints, global_path=args.global_path)
     if population_data:
         box_print("CHECKPOINT LOADED")
@@ -1093,6 +1163,7 @@ if __name__ == "__main__":
         # Create an initial population
         start_gen = 1
         box_print("CREATING POPULATION FROM SEED CODE")
+        seed_rngs(0)
         population = toolbox.population(n=start_population_size, llm_model=llm_model)
         box_print("Batch Checking Created Genes", print_bbox_len=60, new_line_end=False)
         delayed_creation_check(population)
@@ -1103,9 +1174,20 @@ if __name__ == "__main__":
         ind.fitness.values = PLACEHOLDER_FITNESS
         
     check_and_update_fitness(population)
+    if not population_data:
+        population = top_up(population, llm_model)
+        hof.update(population)
+        # Generation 0 is checkpointed so a second arm can start from the SAME initial
+        # population (quantum_island.sbatch INIT_FROM=<run>): RAG vs no-RAG then
+        # differ only in the variation operators, not in a lucky or unlucky start.
+        save_checkpoint(0, folder_name=args.checkpoints, global_path=args.global_path)
+        if INIT_ONLY:
+            print(f"-- Initial population saved ({len(population)} valid); LLMGE_INIT_ONLY=1, stopping --")
+            raise SystemExit(0)
     # Evolution
     for gen in range(start_gen, num_generations if migration_gen == 0 else ((start_gen + migration_gen - 1) // migration_gen) * migration_gen + 1):
         GEN_COUNT = gen
+        seed_rngs(gen)
         TOP_N_GENES = tools.selSPEA2(population, NUM_EOT_ELITES)
         box_print(f"STARTING GENERATION: {gen}", new_line_end=False)
         print_population(population, GLOBAL_DATA)
@@ -1119,22 +1201,7 @@ if __name__ == "__main__":
         '''
 
         box_print("CURRENT POPULATION SIZE:", len(population))
-        while len(population) < num_elites:
-            print("MINIMUM NUMBER OF IND NOT ACHIEVED, TRYING AGAIN")
-            GEN_COUNT = -1
-            TOP_N_GENES = None
-            LINKED_GENES = {}
-            GLOBAL_DATA = {}
-            GLOBAL_DATA_HIST = {}
-            GLOBAL_DATA_ANCESTRY = {}
-            start_gen = 0
-            population = toolbox.population(n=start_population_size, llm_model=llm_model)
-            delayed_creation_check(population)
-            for ind in population:
-                ind.fitness.values = PLACEHOLDER_FITNESS
-            check_and_update_fitness(population)
-            population = [ind for ind in population if ind.fitness.values != INVALID_FITNESS_MAX]
-            box_print("CURRENT POPULATION SIZE:", len(population))
+        population = top_up(population, llm_model)
         # The regeneration loop sets GEN_COUNT = -1 for creation; restore it, or every
         # mutation this generation skips update_ancestry and the next crossover KeyErrors.
         GEN_COUNT = gen
