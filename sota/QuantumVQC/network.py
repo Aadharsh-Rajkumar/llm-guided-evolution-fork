@@ -10,9 +10,14 @@ scaffolding and is never handed to the LLM.
 Contract with the LLM-GE harness:
   python seed_vqc.py --gene-id <id> --out-dir <dir>
 writes "<obj1>, <obj2>" to <out_dir>/<gene_id>_results.txt, matching
-run_improved.py check4results(). Both objectives are MINIMIZED:
-    obj1 = 1 - validation accuracy, averaged over N_STARTS trainings
-    obj2 = plain gate count                  (circuit complexity, EXAQC's "# Gates")
+run_improved.py check4results(). Both objectives are MINIMIZED. Since 2026-10-13
+(QVQC_OBJECTIVES, default "ce,wgates"):
+    obj1 = validation cross-entropy, averaged over N_STARTS trainings (EXAQC's fitness)
+    obj2 = weighted gate count: 1 per 1-qubit gate, TWO_QUBIT_COST per 2-qubit gate
+Runs before that date used obj1 = 1 - mean validation accuracy, obj2 = plain gate count
+("acc,gates"). reports/metric_study/ shows why: over 202 evolved circuits, 1 - accuracy
+had only 73 distinct values (ties) and ranked circuits by unseen test accuracy worse
+(Spearman 0.61) than cross-entropy (0.76). Every alternative is still in the metrics.
 A crash, an invalid circuit, or a missing file leaves the harness to assign
 INVALID_FITNESS_MAX, which is the intended failure path - do not catch broadly
 and report a fake score.
@@ -50,6 +55,8 @@ N_CLASSES = 2
 READOUT = [0]             # one readout qubit represents the two classes
 TWO_QUBIT_COST = 5.0      # two-qubit error rates are ~an order of magnitude worse
 MAX_GATE_COST = 500.0     # cost ceiling; runaway circuits are not interesting
+# Selection objectives: obj1 in {ce, acc, soft}, obj2 in {wgates, gates}.
+OBJECTIVES = tuple(os.getenv("QVQC_OBJECTIVES", "ce,wgates").split(","))
 
 
 def load_data():
@@ -85,7 +92,7 @@ def gate_count(qc):
 
 
 def weighted_gate_cost(qc):
-    """Hardware-weighted count. Diagnostic only; obj2 uses gate_count()."""
+    """Hardware-weighted count (obj2 under the default "ce,wgates" objectives)."""
     cost = 0.0
     for inst in qc.data:
         if inst.operation.name in ("barrier", "measure"):
@@ -320,8 +327,15 @@ def cross_entropy(qc, xp, wp, w_vals, X, y):
 
 
 def accuracy(qc, xp, wp, w_vals, X, y):
+    """Top-1 accuracy (argmax class). With two classes this is plain accuracy."""
     p = forward_batch(qc, xp, wp, X, w_vals)
     return float(np.mean(np.argmax(p, axis=1) == np.asarray(y)))
+
+
+def soft_accuracy(qc, xp, wp, w_vals, X, y):
+    """Mean probability given to the true class: accuracy that credits confidence."""
+    p = forward_batch(qc, xp, wp, X, w_vals)
+    return float(np.mean(p[np.arange(len(y)), np.asarray(y)]))
 
 
 def write_results(out_dir, gene_id, obj1, obj2, extra=None):
@@ -387,9 +401,9 @@ def emit_representations(qc, out_dir, gene_id, arms=("qasm", "ascii", "image")):
     return written
 
 
-def main(n_starts=N_STARTS):
+def main(n_starts=N_STARTS, objectives=OBJECTIVES):
     # n_starts is bound here, when the protected header runs, so a block that
-    # rebinds N_STARTS cannot change how many times an individual is trained.
+    # rebinds N_STARTS (or OBJECTIVES) cannot change how an individual is scored.
     global TRAIN_BUDGET_EVALS, SEED
     ap = argparse.ArgumentParser()
     ap.add_argument("--gene-id", default="seed")
@@ -457,7 +471,9 @@ def main(n_starts=N_STARTS):
             "seed": SEED, "train_passes": _PASSES,
             "val_accuracy": accuracy(qc, xp, wp, w, X_va, y_va),
             "val_cross_entropy": cross_entropy(qc, xp, wp, w, X_va, y_va),
+            "val_soft_accuracy": soft_accuracy(qc, xp, wp, w, X_va, y_va),
             "test_accuracy": accuracy(qc, xp, wp, w, X_te, y_te),
+            "test_soft_accuracy": soft_accuracy(qc, xp, wp, w, X_te, y_te),
             "test_cross_entropy": cross_entropy(qc, xp, wp, w, X_te, y_te),
             "train_accuracy": accuracy(qc, xp, wp, w, X_tr, y_tr),
             "train_cross_entropy": cross_entropy(qc, xp, wp, w, X_tr, y_tr),
@@ -471,17 +487,20 @@ def main(n_starts=N_STARTS):
     w_best = np.asarray(starts[best_start]["weights"])
 
     val_acc, val_ce = avg["val_accuracy"], avg["val_cross_entropy"]
-    obj1 = 1.0 - val_acc
-    obj2 = min(gate_count(qc), MAX_GATE_COST)
     if not np.isfinite(val_ce):
         raise ValueError(f"non-finite validation loss: {val_ce}")
+    obj1 = {"ce": val_ce, "acc": 1.0 - val_acc,
+            "soft": 1.0 - avg["val_soft_accuracy"]}[objectives[0]]
+    obj2 = min({"wgates": weighted_gate_cost(qc), "gates": gate_count(qc)}[objectives[1]],
+               MAX_GATE_COST)
 
     path = write_results(args.out_dir, args.gene_id, obj1, obj2, extra=val_ce)
     print(f"gene {args.gene_id}")
     print(f"  qubits {qc.num_qubits}  depth {qc.depth()}  params {len(wp)}  "
           f"fast-sim {'on' if _compiled(qc, xp, wp) is not None else 'OFF (Statevector fallback)'}")
-    print(f"  obj1 val error {obj1:.4f} ({val_acc:.1%} mean acc over {args.n_starts} starts)"
-          f"   obj2 gates {obj2:.0f}   [val CE {val_ce:.4f}, weighted cost {weighted_gate_cost(qc):.0f}]")
+    print(f"  obj1 [{objectives[0]}] {obj1:.4f}   obj2 [{objectives[1]}] {obj2:.0f}"
+          f"   (val CE {val_ce:.4f}, val acc {val_acc:.1%}, soft acc {avg['val_soft_accuracy']:.1%}"
+          f" over {args.n_starts} starts; {gate_count(qc):.0f} gates, weighted {weighted_gate_cost(qc):.0f})")
     print(f"  mean train acc {avg['train_accuracy']:.1%}   val acc {val_acc:.1%}"
           f"   test acc {avg['test_accuracy']:.1%}")
     print("  val acc per start: " + " ".join(f"{s['val_accuracy']:.1%}" for s in starts))
@@ -498,9 +517,13 @@ def main(n_starts=N_STARTS):
     # file; obj1 and obj2 in the results file are what selection uses.
     metrics = {
         "gene_id": args.gene_id,
-        "obj1_val_error": obj1, "obj2_gates": obj2,
+        "objectives": list(objectives), "obj1": obj1, "obj2": obj2,
+        "obj1_val_error": 1.0 - val_acc, "obj2_gates": gate_count(qc),
         "val_accuracy": val_acc, "val_cross_entropy": val_ce,
+        "val_soft_accuracy": avg["val_soft_accuracy"],
+        "test_soft_accuracy": avg["test_soft_accuracy"],
         "val_accuracy_sd": float(np.std([s["val_accuracy"] for s in starts])),
+        "val_cross_entropy_sd": float(np.std([s["val_cross_entropy"] for s in starts])),
         "test_accuracy": avg["test_accuracy"], "test_cross_entropy": avg["test_cross_entropy"],
         "best_start_val_accuracy": starts[best_start]["val_accuracy"],
         "best_start_test_accuracy": starts[best_start]["test_accuracy"],
