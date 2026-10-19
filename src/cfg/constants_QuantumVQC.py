@@ -58,7 +58,9 @@ else:
     LLM_BASH_SCRIPT_TEMPLATE = ''
     ISLANDS_BASH_SCRIPT_TEMPLATE = ''
 LOCAL_LLM = True
-HOSTNAME_DIR = os.path.join(ROOT_DIR, "hostname.log")
+#: LLMGE_HOSTNAME_FILE lets parallel runs each talk to their own LLM server (server.sh
+#: writes the same variable), e.g. one server per lane of a multi-seed study.
+HOSTNAME_DIR = os.getenv("LLMGE_HOSTNAME_FILE", os.path.join(ROOT_DIR, "hostname.log"))
 
 # Multi-island settings used by islands_wrapper.py.
 GLOBAL_DATA_PATH = "global_data"
@@ -191,8 +193,9 @@ export HUGGINGFACE_HUB_TOKEN="${{HF_TOKEN}}"
 """
 Evolution Constants/Params
 """
-#: 2-objective setup: maximize reward, minimize parameter count.
-FITNESS_WEIGHTS = (-1.0, -1.0)
+#: All objectives minimised; one per entry of QVQC_OBJECTIVES, the variable the seed
+#: reads to decide what it writes (default "ce,wgates"; "ce,wgates,cesd" adds obj3).
+FITNESS_WEIGHTS = (-1.0,) * len(os.getenv("QVQC_OBJECTIVES", "ce,wgates").split(","))
 INVALID_FITNESS_MAX = tuple([float(x * np.inf * -1) for x in FITNESS_WEIGHTS])
 #: A unique placeholder value used before fitness is evaluated
 PLACEHOLDER_FITNESS = tuple([int(x * 9999999999 * -1) for x in FITNESS_WEIGHTS])
