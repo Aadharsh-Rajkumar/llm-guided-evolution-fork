@@ -14,6 +14,10 @@ run_improved.py check4results(). Both objectives are MINIMIZED. Since 2026-10-13
 (QVQC_OBJECTIVES, default "ce,wgates"):
     obj1 = validation cross-entropy, averaged over N_STARTS trainings (EXAQC's fitness)
     obj2 = weighted gate count: 1 per 1-qubit gate, TWO_QUBIT_COST per 2-qubit gate
+Optional third objective (2026-10-18, "ce,wgates,cesd"; the harness sizes its fitness
+from the same variable):
+    obj3 = spread (SD) of validation cross-entropy across the N_STARTS trainings, i.e.
+           how much the result depends on the starting angles
 Runs before that date used obj1 = 1 - mean validation accuracy, obj2 = plain gate count
 ("acc,gates"). reports/metric_study/ shows why: over 202 evolved circuits, 1 - accuracy
 had only 73 distinct values (ties) and ranked circuits by unseen test accuracy worse
@@ -55,8 +59,9 @@ N_CLASSES = 2
 READOUT = [0]             # one readout qubit represents the two classes
 TWO_QUBIT_COST = 5.0      # two-qubit error rates are ~an order of magnitude worse
 MAX_GATE_COST = 500.0     # cost ceiling; runaway circuits are not interesting
-# Selection objectives: obj1 in {ce, acc, soft}, obj2 in {wgates, gates}.
+# Selection objectives: obj1 in {ce, acc, soft}, obj2 in {wgates, gates}, optional obj3 = cesd.
 OBJECTIVES = tuple(os.getenv("QVQC_OBJECTIVES", "ce,wgates").split(","))
+NO_SKILL_SPREAD = 1.0     # obj3 for a circuit no better than a constant guess (see main)
 
 
 def load_data():
@@ -89,6 +94,24 @@ def gate_count(qc):
     """Objective 2. Plain gate count, the "# Gates" column EXAQC reports."""
     return float(sum(1 for inst in qc.data
                      if inst.operation.name not in ("barrier", "measure")))
+
+
+def readout_lightcone(qc, readout=None):
+    """Gates in the backward light cone of the readout qubits - the only gates that
+    can change the prediction. Walking the circuit backwards, a gate is live if it
+    touches a live qubit, and a live multi-qubit gate makes all its qubits live.
+    Returns (live plain gate count, live weighted cost); the rest could be deleted
+    without changing any output."""
+    live, gates, cost = set(READOUT if readout is None else readout), 0, 0.0
+    for inst in reversed(qc.data):
+        if inst.operation.name in ("barrier", "measure"):
+            continue
+        qubits = {qc.find_bit(q).index for q in inst.qubits}
+        if qubits & live:
+            live |= qubits
+            gates += 1
+            cost += TWO_QUBIT_COST if len(qubits) >= 2 else 1.0
+    return float(gates), cost
 
 
 def weighted_gate_cost(qc):
@@ -338,12 +361,12 @@ def soft_accuracy(qc, xp, wp, w_vals, X, y):
     return float(np.mean(p[np.arange(len(y)), np.asarray(y)]))
 
 
-def write_results(out_dir, gene_id, obj1, obj2, extra=None):
-    """run_improved.py reads the first two values; anything after is diagnostic."""
+def write_results(out_dir, gene_id, objs, extra=None):
+    """run_improved.py reads one value per objective; anything after is diagnostic."""
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{gene_id}_results.txt")
     with open(path, "w") as f:
-        f.write(f"{obj1}, {obj2}" + ("" if extra is None else f", {extra}"))
+        f.write(", ".join(str(v) for v in objs) + ("" if extra is None else f", {extra}"))
     return path
 
 
@@ -493,12 +516,25 @@ def main(n_starts=N_STARTS, objectives=OBJECTIVES):
             "soft": 1.0 - avg["val_soft_accuracy"]}[objectives[0]]
     obj2 = min({"wgates": weighted_gate_cost(qc), "gates": gate_count(qc)}[objectives[1]],
                MAX_GATE_COST)
+    # Sensitivity to the starting angles. A circuit that ignores its input has almost
+    # no spread, so it would sit on the front for free; anything no better than the
+    # best constant guess (the class-frequency entropy of the validation set) gets
+    # the worst value instead.
+    val_ce_sd = float(np.std([s["val_cross_entropy"] for s in starts]))
+    prior = np.bincount(y_va, minlength=N_CLASSES) / len(y_va)
+    no_skill_ce = float(-np.sum(prior[prior > 0] * np.log(prior[prior > 0])))
+    objs = [obj1, obj2]
+    if len(objectives) > 2:
+        if objectives[2] != "cesd":
+            raise ValueError(f"unknown third objective {objectives[2]!r}")
+        objs.append(val_ce_sd if val_ce < no_skill_ce else NO_SKILL_SPREAD)
 
-    path = write_results(args.out_dir, args.gene_id, obj1, obj2, extra=val_ce)
+    path = write_results(args.out_dir, args.gene_id, objs, extra=val_ce)
     print(f"gene {args.gene_id}")
     print(f"  qubits {qc.num_qubits}  depth {qc.depth()}  params {len(wp)}  "
           f"fast-sim {'on' if _compiled(qc, xp, wp) is not None else 'OFF (Statevector fallback)'}")
-    print(f"  obj1 [{objectives[0]}] {obj1:.4f}   obj2 [{objectives[1]}] {obj2:.0f}"
+    obj3_text = f"   obj3 [{objectives[2]}] {objs[2]:.4f}" if len(objs) > 2 else ""
+    print(f"  obj1 [{objectives[0]}] {obj1:.4f}   obj2 [{objectives[1]}] {obj2:.0f}{obj3_text}"
           f"   (val CE {val_ce:.4f}, val acc {val_acc:.1%}, soft acc {avg['val_soft_accuracy']:.1%}"
           f" over {args.n_starts} starts; {gate_count(qc):.0f} gates, weighted {weighted_gate_cost(qc):.0f})")
     print(f"  mean train acc {avg['train_accuracy']:.1%}   val acc {val_acc:.1%}"
@@ -506,6 +542,7 @@ def main(n_starts=N_STARTS, objectives=OBJECTIVES):
     print("  val acc per start: " + " ".join(f"{s['val_accuracy']:.1%}" for s in starts))
 
     dead, rotations = count_dead_gates(qc, xp, wp, w_best)
+    live_gates, live_cost = readout_lightcone(qc)
     two_qubit = sum(1 for inst in qc.data
                     if inst.operation.num_qubits >= 2
                     and inst.operation.name not in ("barrier", "measure"))
@@ -517,7 +554,8 @@ def main(n_starts=N_STARTS, objectives=OBJECTIVES):
     # file; obj1 and obj2 in the results file are what selection uses.
     metrics = {
         "gene_id": args.gene_id,
-        "objectives": list(objectives), "obj1": obj1, "obj2": obj2,
+        "objectives": list(objectives), "obj1": obj1, "obj2": obj2, "objs": objs,
+        "no_skill_ce": no_skill_ce,
         "obj1_val_error": 1.0 - val_acc, "obj2_gates": gate_count(qc),
         "val_accuracy": val_acc, "val_cross_entropy": val_ce,
         "val_soft_accuracy": avg["val_soft_accuracy"],
@@ -529,6 +567,7 @@ def main(n_starts=N_STARTS, objectives=OBJECTIVES):
         "best_start_test_accuracy": starts[best_start]["test_accuracy"],
         "train_accuracy": avg["train_accuracy"], "train_cross_entropy": avg["train_cross_entropy"],
         "gates": gate_count(qc), "weighted_gate_cost": weighted_gate_cost(qc),
+        "live_gates": live_gates, "live_weighted_gate_cost": live_cost,
         "two_qubit_gates": two_qubit, "depth": qc.depth(), "gate_histogram": ops,
         "n_qubits": qc.num_qubits, "n_params": len(wp),
         "n_starts": args.n_starts, "starts": starts,
