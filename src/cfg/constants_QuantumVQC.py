@@ -38,6 +38,8 @@ MUJOCO_EVAL_MAX_STEPS = int(os.getenv("MUJOCO_EVAL_MAX_STEPS", "1000"))
 #: Output directory for intermediate generation data
 OUTPUT_DIR = "quantum_vqc_output"
 PORT = 8169
+LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "3600"))
+LLM_RETRY_SECONDS = int(os.getenv("LLM_RETRY_SECONDS", "7200"))
 
 CLUSTER = "pace-ice"
 LLM_MODEL = 'llama3.3'

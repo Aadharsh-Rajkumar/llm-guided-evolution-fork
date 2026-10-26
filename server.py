@@ -16,7 +16,7 @@ from src.cfg.constants import *
 
 app = FastAPI(title="LLM API", version="1.0")
 
-BATCH_SIZE = 8  # num of LLM requests to process at once
+BATCH_SIZE = 16 if torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_memory > 100 * 2**30 else 8  # num of LLM requests to process at once
 BATCH_WAIT_TIME = 2  # max wait time for batch to fill in s
 
 class LLMRequest(BaseModel):
@@ -192,31 +192,49 @@ class LLMModel:
                     
                     start_time = time.time()
                     
-                    results = await asyncio.to_thread(
-                        self.pipeline,
-                        prompts,
-                        max_new_tokens=max_new_tokens,
-                        temperature=temperature,
-                        top_p=top_p,
-                    )
-                    
+                    def run(chunk):
+                        return self.pipeline(
+                            chunk,
+                            max_new_tokens=max_new_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                        )
+
+                    try:
+                        results = await asyncio.to_thread(run, prompts)
+                    except torch.cuda.OutOfMemoryError:
+                        torch.cuda.empty_cache()
+                        print(f"Batch {batch_id} ran out of GPU memory; retrying its "
+                              f"{batch_size} requests one at a time", flush=True)
+                        results = []
+                        for prompt in prompts:
+                            try:
+                                results.append((await asyncio.to_thread(run, [prompt]))[0])
+                            except torch.cuda.OutOfMemoryError as err:
+                                torch.cuda.empty_cache()
+                                results.append(err)
+                    finally:
+                        torch.cuda.empty_cache()
+
                     response_time = round(time.time() - start_time, 2)
                     print(
                         f"Finished batch {batch_id} in {response_time}s "
                         f"(queued after finish: {self.request_queue.qsize()})",
                         flush=True,
                     )
-                    
+
                     # for every future, set its result
                     for result, future in zip(results, futures):
-                        output_txt = result[0].get("generated_text", str(result))
-                        
-                        future.set_result({
-                            "generated_text": output_txt,
-                            "response_time_sec": response_time,
-                            "batch_size": batch_size
-                        })
-                        
+                        if isinstance(result, Exception):
+                            print(f"Error processing request: {result}", flush=True)
+                            future.set_exception(result)
+                        else:
+                            future.set_result({
+                                "generated_text": result[0].get("generated_text", str(result)),
+                                "response_time_sec": response_time,
+                                "batch_size": batch_size
+                            })
+
                         # done with task
                         self.request_queue.task_done()
                 

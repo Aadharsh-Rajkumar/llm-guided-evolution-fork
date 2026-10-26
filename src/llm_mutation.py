@@ -72,16 +72,11 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
                                             top_p, llm_model, temperature)
     
     if not code_from_llm or code_from_llm.strip() == "ERROR":
-        # Never splice the prompt (the old fallback) or the "ERROR" marker into a
-        # variant: both are guaranteed SyntaxError/NameError deaths that look like
-        # bad LLM code. Keep the parent's block; the child evaluates as a clone.
-        print("LLM CODE EXTRACTION FAILED. Falling back to parent chunk.", flush=True)
-        code_from_llm = code2llm.strip()
-    else:
-        valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
-        if not valid_code:
-            print(f"Rejected generated chunk: {invalid_reason}. Falling back to parent chunk.", flush=True)
-            code_from_llm = code2llm.strip()
+        raise RuntimeError("LLM CODE EXTRACTION FAILED: no code from the LLM; "
+                           "the child is recorded as a failed mutation")
+    valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
+    if not valid_code:
+        raise RuntimeError(f"Rejected generated chunk: {invalid_reason}")
 
     note_txt = extract_note(code2llm)
     parts[augment_idx] = f"\n{note_txt}{code_from_llm}\n"

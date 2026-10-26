@@ -21,6 +21,7 @@ module load uv
 
 # Make sure CUDA can see all GPUs
 export CUDA_VISIBLE_DEVICES=0,1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export UV_CACHE_DIR="${TMPDIR:-${SLURM_TMPDIR:-/tmp}}/uv-cache-${SLURM_JOB_ID:-$$}"
 mkdir -p "$UV_CACHE_DIR"
 echo "Using UV cache: $UV_CACHE_DIR"
@@ -49,33 +50,31 @@ fi
 #
 # Two servers on one node (2026-10-18, several servers for parallel runs) cannot both
 # bind port 8169: the second one dies after loading the model, and its readiness check
-# would see the FIRST one answer. So move elsewhere if the port is taken, and publish
-# only once the process listening on the port is our own.
-move_elsewhere() {
-    echo "port 8169 on $SERVER_HOSTNAME belongs to another server; resubmitting with --exclude"
-    sbatch --exclude="$SERVER_HOSTNAME" -t "$(squeue -h -j "$SLURM_JOB_ID" -o %l)" \
-        -J "$SLURM_JOB_NAME" --export=ALL server.sh "$COUNT"
-    exit 1
-}
-owns_port() {      # is the listener on 8169 a descendant of $SERVER_PID?
+# would see the FIRST one answer. PACE's submit plugin replaces --exclude, so a server
+# cannot move node: each takes its own port (LLMGE_PORT, or the next free one), publishes
+# host:port, and only once the process listening on that port is our own.
+PORT=${LLMGE_PORT:-8169}
+while ss -ltnH "sport = :$PORT" 2>/dev/null | grep -q . || curl -sf "http://$SERVER_HOSTNAME:$PORT/" > /dev/null; do
+    PORT=$((PORT + 1))
+done
+echo "using port $PORT"
+owns_port() {
     local pid
-    pid=$(ss -ltnpH "sport = :8169" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+    pid=$(ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
     while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
         [ "$pid" = "$SERVER_PID" ] && return 0
         pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
     done
     return 1
 }
-curl -sf "http://$SERVER_HOSTNAME:8169/" > /dev/null && move_elsewhere
-uv run python -m uvicorn server:app --host $SERVER_HOSTNAME --port 8169 --workers 1 &
+uv run python -m uvicorn server:app --host $SERVER_HOSTNAME --port $PORT --workers 1 &
 SERVER_PID=$!
-until curl -sf "http://$SERVER_HOSTNAME:8169/" > /dev/null && owns_port; do
+until curl -sf "http://$SERVER_HOSTNAME:$PORT/" > /dev/null && owns_port; do
     if ! kill -0 $SERVER_PID 2>/dev/null; then
-        curl -sf "http://$SERVER_HOSTNAME:8169/" > /dev/null && move_elsewhere
         echo "server exited before becoming ready"; exit 1
     fi
     sleep 15
 done
-echo "$SERVER_HOSTNAME" > "$HOSTNAME_FILE"
+echo "$SERVER_HOSTNAME:$PORT" > "$HOSTNAME_FILE"
 echo "Server ready; wrote hostname to $HOSTNAME_FILE"
 wait $SERVER_PID

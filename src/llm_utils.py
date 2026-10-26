@@ -535,6 +535,9 @@ def get_llm_server_hostname():
         hostname = f.readline().strip() 
     return hostname
 
+def llm_server_address(hostname):
+    return hostname if ":" in hostname else f"{hostname}:{PORT}"
+
 def submit_mixtral_local(prompt, max_new_tokens=850, temperature=0.2, top_p=0.15, server_url=None, return_gen=False):
     if server_url is None:
         server_url = f"http://{os.getenv('SERVER_HOSTNAME', 'localhost')}:{PORT}/generate"
@@ -547,29 +550,36 @@ def submit_mixtral_local(prompt, max_new_tokens=850, temperature=0.2, top_p=0.15
 
     headers = {"Content-Type": "application/json"}
 
-    llm_hostname = get_llm_server_hostname()
-    
-    print(llm_hostname)
-
-    server_url = f"http://{llm_hostname}:{PORT}/generate"
-    
-    try:
-        response = requests.post(server_url, headers=headers, json=payload)
-        
-        if response.status_code == 200:
-            output_txt = response.json().get("generated_text", "No output received.")
-            print(f'{response.json().get("response_time_sec", "-1")} sec')
-            if return_gen is False:
-                return output_txt
-            else:
-                return output_txt, generate_text
-        else:
+    deadline = time.time() + LLM_RETRY_SECONDS
+    attempt, delay = 0, 30
+    while True:
+        attempt += 1
+        llm_hostname = get_llm_server_hostname()
+        print(llm_hostname)
+        server_url = f"http://{llm_server_address(llm_hostname)}/generate"
+        try:
+            response = requests.post(server_url, headers=headers, json=payload,
+                                     timeout=(30, LLM_REQUEST_TIMEOUT))
+            if response.status_code == 200:
+                output_txt = response.json().get("generated_text", "No output received.")
+                print(f'{response.json().get("response_time_sec", "-1")} sec')
+                if return_gen is False:
+                    return output_txt
+                else:
+                    return output_txt, output_txt
             print(f"Error: {response.status_code}")
             print(response.text)
+            if response.status_code < 500:
+                return None
+        except requests.exceptions.RequestException as e:
+            print(f"Request failed: {e}")
+        if time.time() + delay > deadline:
+            print(f"LLM request failed after {attempt} attempts over "
+                  f"{LLM_RETRY_SECONDS}s; giving up", flush=True)
             return None
-    except requests.exceptions.RequestException as e:
-        print(f"Request failed: {e}")
-        return None
+        print(f"LLM request attempt {attempt} failed; retrying in {delay}s", flush=True)
+        time.sleep(delay)
+        delay = min(delay * 2, 300)
 
 def submit_deepseek_local(prompt, max_new_tokens=850, temperature=0.2, top_p=0.15, server_url=None, return_gen=False):
     if server_url is None:

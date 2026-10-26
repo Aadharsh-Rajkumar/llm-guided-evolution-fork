@@ -191,6 +191,14 @@ def record_failure(gene_id, error):
                                'op': meta.get('op'), 'error': error}) + '\n')
 
 
+def record_llm_failure(gene_id, job_id, op):
+    if not FAILURE_LOG:
+        return
+    with open(os.path.join(os.path.dirname(FAILURE_LOG), "llm_failures.jsonl"), 'a') as file:
+        file.write(json.dumps({'gene': gene_id, 'gen': GEN_COUNT, 'op': op,
+                               'job_id': job_id}) + '\n')
+
+
 def write_bash_script(llm_model,
                       job_name,
                       input_filename_x=f'{SOTA_ROOT}/{SEED_NETWORK}',
@@ -289,7 +297,7 @@ def wait_for_llm_server(timeout=3600, check_interval=10):
                 last_error = err
 
         if hostname:
-            server_url = f"http://{hostname}:{PORT}/"
+            server_url = f"http://{hostname if ':' in hostname else f'{hostname}:{PORT}'}/"
             try:
                 with urllib.request.urlopen(server_url, timeout=5) as response:
                     if 200 <= response.status < 300:
@@ -754,11 +762,9 @@ def delayed_mate_check(offspring):
 
                 failed_process = not (successful_sub_flag and job_done)
                 if failed_process:
-                    new_gene_id = LINKED_GENES[k]
-                    old_gene_id = k
-                else:
-                    new_gene_id = k
-                    old_gene_id = LINKED_GENES[k]
+                    record_llm_failure(k, job_id, 'crossover')
+                new_gene_id = k
+                old_gene_id = LINKED_GENES[k]
                 individual = update_individual(individual, new_gene_id, old_gene_id=old_gene_id, 
                                                process_success=not failed_process, process_type='Mating')
 
@@ -776,7 +782,9 @@ def delayed_creation_check(offspring):
                     job_id = GLOBAL_DATA[k]["job_id"]
                     print(f'Checking for Job Completion: {job_id} for {gene_id}', flush=True)
                     job_done = check4job_completion(job_id, extension="evolution/")
-                  
+                    if not job_done:
+                        record_llm_failure(gene_id, job_id, 'creation')
+
     return offspring
 
 def delayed_mutate_check(offspring):
@@ -811,6 +819,8 @@ def delayed_mutate_check(offspring):
                         print(f'\t☠ Error Loading Model Files for {new_gene_id}')
 
                     failed_process = not (successful_sub_flag and job_done)
+                    if failed_process:
+                        record_llm_failure(k, job_id, 'mutation')
                     old_gene_id = LINKED_GENES[k]
                     individual = update_individual(individual, new_gene_id, old_gene_id=old_gene_id,
                                                    process_success=not failed_process, process_type='Mutation')

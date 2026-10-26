@@ -76,10 +76,8 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
                                             top_p, llm_model, temperature)
     
     if not code_from_llm or code_from_llm.strip() == "ERROR":
-        # Same as llm_mutation.py: keep parent X's block rather than splicing the
-        # prompt or the "ERROR" marker into the child.
-        print("LLM CODE EXTRACTION FAILED. Falling back to parent chunk.", flush=True)
-        code_from_llm = parts_x[augment_idx + 1].strip()
+        raise RuntimeError("LLM CODE EXTRACTION FAILED: no code from the LLM; "
+                           "the child is recorded as a failed crossover")
     
     # Insert note if present
     # `parts` was built from parts_x[1:], so augment_idx 0 is block 1. Indexing
