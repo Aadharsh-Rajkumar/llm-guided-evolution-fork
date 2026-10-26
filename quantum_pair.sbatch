@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=qvqc_pair
-#SBATCH -p pace-cpu
+#SBATCH -p pace-cpu,ice-cpu,ice-bw-cpu
 #SBATCH -t 14:00:00
 #SBATCH --mem 32G
 #SBATCH -c 4
@@ -22,7 +22,7 @@ TAG=${TAG:-s$SEED}
 export LLMGE_RANDOM_SEED=$SEED
 # The study's three objectives. Set any other list in the submitting shell, not in
 # --export: sbatch --export splits on commas, so "QVQC_OBJECTIVES=ce,wgates" arrives as "ce".
-export QVQC_OBJECTIVES=${QVQC_OBJECTIVES:-ce,wgates,cesd}
+export QVQC_OBJECTIVES=${QVQC_OBJECTIVES:-ce,wlive,cesd}
 LOGS=run_job_outputs/islands
 echo "pair $TAG seed=$SEED objectives=${QVQC_OBJECTIVES:-ce,wgates} server file=${LLMGE_HOSTNAME_FILE:-hostname.log} host=$(hostname)"
 

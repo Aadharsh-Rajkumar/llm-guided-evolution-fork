@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCS_DIR = ROOT / "docs" / "qiskit_rag"
 TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_]+")
 PINNED_NOTE = "qiskit_imports_api.md"
+PINNED_NOTES = (PINNED_NOTE, "gate_budget.md")
 ERROR_RE = re.compile(r"^(\w*(?:Error|Exception)\b.*)$", re.M)
 
 
@@ -137,9 +138,9 @@ def build_rag_section(goal: str, code: str, failures: list[str] | None = None,
     """Prompt text appended to one mutation/crossover prompt, and the notes it used."""
     failures = failures or []
     query = " ".join([goal, code] + failures * 2)
-    results = retrieve(query, top_k=top_k, exclude=(PINNED_NOTE,))
-    pinned = (DOCS_DIR / PINNED_NOTE).read_text(encoding="utf-8").strip()
-    parts = [f"[{PINNED_NOTE}; pinned]\n{pinned}"]
+    results = retrieve(query, top_k=top_k, exclude=PINNED_NOTES)
+    parts = [f"[{name}; pinned]\n{(DOCS_DIR / name).read_text(encoding='utf-8').strip()}"
+             for name in PINNED_NOTES]
     parts += [f"[{item.source}; BM25={item.score:.3f}]\n{item.text}" for item in results]
     contract = block_contract(code)
     text = ("\n\nRetrieved Qiskit API guidance for THIS block (use as references, "
@@ -149,7 +150,9 @@ def build_rag_section(goal: str, code: str, failures: list[str] | None = None,
     if failures:
         text += ("\n\nRecent mutations of this block crashed with these errors; "
                  "do not repeat them:\n" + "\n".join(f"- {e}" for e in failures))
-    return text, [PINNED_NOTE] + [item.source for item in results]
+    text += ("\n\nEnd of the reference notes. Reply with the complete modified code block "
+             "in one ```python fenced block.")
+    return text, list(PINNED_NOTES) + [item.source for item in results]
 
 
 def last_error(log_text: str) -> str | None:

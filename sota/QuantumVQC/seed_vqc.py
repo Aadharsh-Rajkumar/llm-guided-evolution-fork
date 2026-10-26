@@ -59,7 +59,7 @@ N_CLASSES = 2
 READOUT = [0]             # one readout qubit represents the two classes
 TWO_QUBIT_COST = 5.0      # two-qubit error rates are ~an order of magnitude worse
 MAX_GATE_COST = 500.0     # cost ceiling; runaway circuits are not interesting
-# Selection objectives: obj1 in {ce, acc, soft}, obj2 in {wgates, gates}, optional obj3 = cesd.
+# Selection objectives: obj1 in {ce, acc, soft}, obj2 in {wgates, gates, wlive, live}, optional obj3 = cesd.
 OBJECTIVES = tuple(os.getenv("QVQC_OBJECTIVES", "ce,wgates").split(","))
 NO_SKILL_SPREAD = 1.0     # obj3 for a circuit no better than a constant guess (see main)
 
@@ -514,7 +514,9 @@ def main(n_starts=N_STARTS, objectives=OBJECTIVES):
         raise ValueError(f"non-finite validation loss: {val_ce}")
     obj1 = {"ce": val_ce, "acc": 1.0 - val_acc,
             "soft": 1.0 - avg["val_soft_accuracy"]}[objectives[0]]
-    obj2 = min({"wgates": weighted_gate_cost(qc), "gates": gate_count(qc)}[objectives[1]],
+    live_gates, live_cost = readout_lightcone(qc)
+    obj2 = min({"wgates": weighted_gate_cost(qc), "gates": gate_count(qc),
+                "wlive": live_cost, "live": live_gates}[objectives[1]],
                MAX_GATE_COST)
     # Sensitivity to the starting angles. A circuit that ignores its input has almost
     # no spread, so it would sit on the front for free; anything no better than the
@@ -542,7 +544,6 @@ def main(n_starts=N_STARTS, objectives=OBJECTIVES):
     print("  val acc per start: " + " ".join(f"{s['val_accuracy']:.1%}" for s in starts))
 
     dead, rotations = count_dead_gates(qc, xp, wp, w_best)
-    live_gates, live_cost = readout_lightcone(qc)
     two_qubit = sum(1 for inst in qc.data
                     if inst.operation.num_qubits >= 2
                     and inst.operation.name not in ("barrier", "measure"))

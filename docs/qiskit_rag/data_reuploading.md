@@ -12,6 +12,9 @@ bound per sample; no new input parameters are needed):
         build_entanglement(qc)
 
 It increases expressivity (a single-qubit classifier with re-uploading is a universal
-approximator; Perez-Salinas et al., Quantum 4, 226, 2020) at the cost of N_QUBITS extra
-encoding gates per extra upload. Trainable weights must still be allocated for every
-layer: `ParameterVector("w", N_LAYERS * weights_per_layer)`.
+approximator; Perez-Salinas et al., Quantum 4, 226, 2020), but every extra upload costs
+N_QUBITS more encoding gates, and circuit size is an objective. Use it only when the
+circuit underfits (training cross-entropy close to validation and both high). If the
+circuit already re-uploads, removing one upload or one layer is an equally valid edit.
+Trainable weights must still be allocated for every layer:
+`ParameterVector("w", N_LAYERS * weights_per_layer)`.
