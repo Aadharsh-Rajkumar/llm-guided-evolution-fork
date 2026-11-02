@@ -525,6 +525,8 @@ def main(n_starts=N_STARTS, objectives=OBJECTIVES):
     val_ce_sd = float(np.std([s["val_cross_entropy"] for s in starts]))
     prior = np.bincount(y_va, minlength=N_CLASSES) / len(y_va)
     no_skill_ce = float(-np.sum(prior[prior > 0] * np.log(prior[prior > 0])))
+    if val_ce >= no_skill_ce:
+        obj2 = MAX_GATE_COST
     objs = [obj1, obj2]
     if len(objectives) > 2:
         if objectives[2] != "cesd":
