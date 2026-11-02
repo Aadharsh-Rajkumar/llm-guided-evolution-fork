@@ -12,10 +12,26 @@ from cfg.constants import *
 from utils.print_utils import box_print
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, extract_note, generate_augmented_code, 
-                       clean_code_from_llm, retrieve_base_code)
-from qiskit_rag import build_rag_section, recent_failures
+                       clean_code_from_llm, retrieve_base_code,
+                       function_reply_instruction, merge_function_reply)
+from qiskit_rag import build_rag_section, recent_failures, rag_flags
 import json
 from pathlib import Path
+
+
+def build_prompt(template_txt, x, y, block, qiskit_rag, failure_log):
+    txt2llm = template_txt.format(x.strip(), y.strip())
+    long_block = function_reply_instruction(x)
+    txt2llm += long_block
+    rag_sources, failures = [], []
+    flags = rag_flags()
+    if qiskit_rag and flags["crossover"]:
+        failures = recent_failures(failure_log, block) if flags["error_feedback"] else []
+        reply = "the changed functions" if long_block else "the complete modified code block"
+        rag_txt, rag_sources = build_rag_section(
+            "Combine two Qiskit circuit blocks", f"{x}\n{y}", failures, flags=flags, reply=reply)
+        txt2llm += rag_txt
+    return txt2llm, rag_sources, failures, bool(long_block)
 
 
 def augment_network(input_filename_x, input_filename_y, output_filename,
@@ -58,19 +74,16 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
         template_txt = file.read()
 
     # Add code to be augmented
-    txt2llm = template_txt.format(x.strip(), y.strip())
-    # Crossover got no notes in the Oct 8 RAG run; it now gets the same per-block
-    # retrieval as a mutation, queried with both parents' versions of the block.
-    rag_sources = []
-    if qiskit_rag:
-        failures = recent_failures(failure_log, augment_idx + 1)
-        rag_txt, rag_sources = build_rag_section(
-            "Combine two Qiskit circuit blocks", f"{x}\n{y}", failures)
-        txt2llm += rag_txt
+    txt2llm, rag_sources, failures, long_block = build_prompt(template_txt, x, y, augment_idx + 1,
+                                                              qiskit_rag, failure_log)
+    print(f"Run flags: rag={bool(qiskit_rag)} {rag_flags() if qiskit_rag else {}} "
+          f"output_tokens={LLM_OUTPUT_TOKENS} function_reply={long_block}", flush=True)
+    if qiskit_rag and rag_sources:
         print(f"RAG block {augment_idx + 1}: sources {', '.join(rag_sources)}; "
               f"{len(failures)} recent error(s) fed back", flush=True)
     Path(f"{output_filename}.rag.json").write_text(json.dumps(
-        {"op": "crossover", "block": augment_idx + 1, "rag": bool(qiskit_rag), "sources": rag_sources}))
+        {"op": "crossover", "block": augment_idx + 1, "rag": bool(qiskit_rag), "sources": rag_sources,
+         "function_reply": long_block}))
     # Generate augmented code
     code_from_llm = generate_augmented_code(txt2llm, augment_idx, apply_quality_control,
                                             top_p, llm_model, temperature)
@@ -78,6 +91,8 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
     if not code_from_llm or code_from_llm.strip() == "ERROR":
         raise RuntimeError("LLM CODE EXTRACTION FAILED: no code from the LLM; "
                            "the child is recorded as a failed crossover")
+    if long_block:
+        code_from_llm = merge_function_reply(x, code_from_llm)
     
     # Insert note if present
     # `parts` was built from parts_x[1:], so augment_idx 0 is block 1. Indexing

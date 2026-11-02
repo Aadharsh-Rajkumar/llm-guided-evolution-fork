@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import json
 import math
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +25,19 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCS_DIR = ROOT / "docs" / "qiskit_rag"
 TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_]+")
 PINNED_NOTE = "qiskit_imports_api.md"
-PINNED_NOTES = (PINNED_NOTE, "gate_budget.md")
+GATE_BUDGET_NOTE = "gate_budget.md"
+PINNED_NOTES = (PINNED_NOTE, GATE_BUDGET_NOTE)
+REUPLOAD_NOTE = "data_reuploading.md"
+ACCURACY_GOAL_RE = re.compile(r"\b(improve|accuracy|expressiv|underfit)", re.I)
+RAG_FLAG_ENV = {
+    "retrieval": "LLMGE_RAG_RETRIEVAL",
+    "pin_api": "LLMGE_RAG_PIN_API",
+    "pin_gate_budget": "LLMGE_RAG_PIN_GATE_BUDGET",
+    "contract": "LLMGE_RAG_CONTRACT",
+    "error_feedback": "LLMGE_RAG_ERROR_FEEDBACK",
+    "crossover": "LLMGE_RAG_CROSSOVER",
+    "reupload_gating": "LLMGE_RAG_REUPLOAD_GATING",
+}
 ERROR_RE = re.compile(r"^(\w*(?:Error|Exception)\b.*)$", re.M)
 
 
@@ -133,26 +146,47 @@ def recent_failures(failure_log: str | Path | None, block: int | None, limit: in
     return errors
 
 
+def rag_flags() -> dict[str, bool]:
+    return {name: os.getenv(env, "1") == "1" for name, env in RAG_FLAG_ENV.items()}
+
+
+def accuracy_goal(goal: str) -> bool:
+    return bool(ACCURACY_GOAL_RE.search(goal))
+
+
 def build_rag_section(goal: str, code: str, failures: list[str] | None = None,
-                      top_k: int = 2) -> tuple[str, list[str]]:
+                      top_k: int = 2, flags: dict[str, bool] | None = None,
+                      reply: str = "the complete modified code block") -> tuple[str, list[str]]:
     """Prompt text appended to one mutation/crossover prompt, and the notes it used."""
-    failures = failures or []
-    query = " ".join([goal, code] + failures * 2)
-    results = retrieve(query, top_k=top_k, exclude=PINNED_NOTES)
+    flags = rag_flags() if flags is None else flags
+    failures = (failures or []) if flags["error_feedback"] else []
+    pinned = [name for name, on in ((PINNED_NOTE, flags["pin_api"]),
+                                    (GATE_BUDGET_NOTE, flags["pin_gate_budget"])) if on]
+    results = []
+    if flags["retrieval"]:
+        exclude = PINNED_NOTES
+        if flags["reupload_gating"] and not accuracy_goal(goal):
+            exclude = exclude + (REUPLOAD_NOTE,)
+        query = " ".join([goal, code] + failures * 2)
+        results = retrieve(query, top_k=top_k, exclude=exclude)
     parts = [f"[{name}; pinned]\n{(DOCS_DIR / name).read_text(encoding='utf-8').strip()}"
-             for name in PINNED_NOTES]
+             for name in pinned]
     parts += [f"[{item.source}; BM25={item.score:.3f}]\n{item.text}" for item in results]
-    contract = block_contract(code)
-    text = ("\n\nRetrieved Qiskit API guidance for THIS block (use as references, "
-            "not as code to copy):\n" + "\n\n".join(parts))
+    contract = block_contract(code) if flags["contract"] else ""
+    if not (parts or contract or failures):
+        return "", []
+    text = ""
+    if parts:
+        text += ("\n\nRetrieved Qiskit API guidance for THIS block (use as references, "
+                 "not as code to copy):\n" + "\n\n".join(parts))
     if contract:
         text += "\n\n" + contract
     if failures:
         text += ("\n\nRecent mutations of this block crashed with these errors; "
                  "do not repeat them:\n" + "\n".join(f"- {e}" for e in failures))
-    text += ("\n\nEnd of the reference notes. Reply with the complete modified code block "
+    text += (f"\n\nEnd of the reference notes. Reply with {reply} "
              "in one ```python fenced block.")
-    return text, list(PINNED_NOTES) + [item.source for item in results]
+    return text, pinned + [item.source for item in results]
 
 
 def last_error(log_text: str) -> str | None:

@@ -5,6 +5,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import json
 
+import pytest
+
 from src.qiskit_rag import (PINNED_NOTE, build_rag_section, recent_failures,
                             retrieve, retrieve_context)
 
@@ -90,7 +92,8 @@ def test_mutation_job_appends_rag_only_when_enabled(tmp_path, monkeypatch):
                         lambda txt, *a, **k: prompts.append(txt) or "ERROR")
     for rag in (False, True):
         out = tmp_path / f"child_{rag}.py"
-        mutation.augment_network(str(seed), str(out), str(template), qiskit_rag=rag)
+        with pytest.raises(RuntimeError):
+            mutation.augment_network(str(seed), str(out), str(template), qiskit_rag=rag)
         meta = json.loads(Path(f"{out}.rag.json").read_text())
         assert meta["rag"] is rag and 1 <= meta["block"] <= 6
     assert "Retrieved Qiskit API guidance" not in prompts[0]

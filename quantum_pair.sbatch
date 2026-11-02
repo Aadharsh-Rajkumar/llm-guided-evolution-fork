@@ -25,6 +25,7 @@ export LLMGE_RANDOM_SEED=$SEED
 export QVQC_OBJECTIVES=${QVQC_OBJECTIVES:-ce,wlive,cesd}
 LOGS=run_job_outputs/islands
 echo "pair $TAG seed=$SEED objectives=${QVQC_OBJECTIVES:-ce,wgates} server file=${LLMGE_HOSTNAME_FILE:-hostname.log} host=$(hostname)"
+env | grep -E '^(LLMGE_RAG_|LLMGE_LONG_OUTPUT|LLMGE_FUNCTION_REPLY|LLM_OUTPUT_TOKENS)' | sort
 
 if [ ! -f "quantum_runs/qvqc_init_$TAG/checkpoints/checkpoint_gen_0.pkl" ]; then
     RUN=qvqc_init_$TAG LLMGE_INIT_ONLY=1 LLMGE_QISKIT_RAG=0 \

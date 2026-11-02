@@ -18,7 +18,7 @@ from deap.tools import HallOfFame, ParetoFront
 from functools import partial
 from src.utils.print_utils import print_population, print_scores, box_print, print_job_info
 from src.llm_utils import split_file, retrieve_base_code
-from src.qiskit_rag import last_error
+from src.qiskit_rag import last_error, rag_flags
 from src.cfg.constants import *
 from src.cfg import constants
 import glob
@@ -1160,6 +1160,14 @@ if __name__ == "__main__":
 
     os.makedirs(args.global_path, exist_ok=True)
     FAILURE_LOG = os.path.abspath(os.path.join(args.global_path, "failures.jsonl"))
+    RUN_FLAGS = {"qiskit_rag": QISKIT_RAG, "rag_components": rag_flags() if QISKIT_RAG else {},
+                 "llm_output_tokens": LLM_OUTPUT_TOKENS, "function_reply": FUNCTION_REPLY,
+                 "objectives": os.getenv("QVQC_OBJECTIVES", "ce,wgates"),
+                 "random_seed": os.getenv("LLMGE_RANDOM_SEED")}
+    print(f"RUN FLAGS: {json.dumps(RUN_FLAGS)}", flush=True)
+    os.makedirs(args.global_path, exist_ok=True)
+    with open(os.path.join(args.global_path, "run_flags.json"), "w") as file:
+        json.dump(RUN_FLAGS, file, indent=1)
 
     population_data, start_gen, global_data = load_checkpoint(folder_name=args.checkpoints, global_path=args.global_path)
     if population_data:
