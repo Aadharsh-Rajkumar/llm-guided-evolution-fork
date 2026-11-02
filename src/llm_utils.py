@@ -1,4 +1,5 @@
 import argparse
+import ast
 import sys
 sys.path.append("src")
 import re
@@ -109,7 +110,8 @@ def generate_augmented_code(txt2llm, augment_idx, apply_quality_control, top_p, 
     
     if apply_quality_control:
         base_code = retrieve_base_code(augment_idx)
-        code_from_llm, generate_text = llm_code_generator(txt2llm, return_gen=True, top_p=top_p, temperature=temperature)
+        code_from_llm, generate_text = llm_code_generator(txt2llm, return_gen=True, top_p=top_p, temperature=temperature,
+                                                          max_new_tokens=LLM_OUTPUT_TOKENS)
         temp, counter = None, 0 #default to run the quality control
         while counter < max_gen_attempts and (temp not in ["NC", "OOT", "MS", "ERROR"]): #counter to deal with stubborn 
             if temp == "NC": #regenerate based on error
@@ -131,7 +133,8 @@ def generate_augmented_code(txt2llm, augment_idx, apply_quality_control, top_p, 
             return base_code
 
     else:
-        code_from_llm = llm_code_generator(txt2llm, top_p=top_p, temperature=temperature)
+        code_from_llm = llm_code_generator(txt2llm, top_p=top_p, temperature=temperature,
+                                           max_new_tokens=LLM_OUTPUT_TOKENS)
         box_print("TEXT FROM LLM", print_bbox_len=60, new_line_end=False)
         
         print(code_from_llm)
@@ -142,6 +145,56 @@ def generate_augmented_code(txt2llm, augment_idx, apply_quality_control, top_p, 
     print(code_from_llm)
     
     return code_from_llm 
+
+def function_reply_instruction(code):
+    if not FUNCTION_REPLY or len(code.strip().splitlines()) < FUNCTION_REPLY_MIN_LINES:
+        return ""
+    try:
+        names = [n.name for n in ast.parse(code).body if isinstance(n, ast.FunctionDef)]
+    except SyntaxError:
+        names = []
+    listed = f" It defines {', '.join(names)}." if names else ""
+    return (f"\n\nThis block is long.{listed} Reply with only the complete definitions of the functions "
+            "you change (keep their names and signatures) and any new helper functions; every function you "
+            "do not return is kept unchanged.")
+
+
+def _node_source(lines, node):
+    start = min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])]) - 1
+    return start, node.end_lineno
+
+
+def merge_function_reply(parent, reply):
+    try:
+        parent_tree, reply_tree = ast.parse(parent), ast.parse(reply)
+    except SyntaxError:
+        return reply
+    parent_funcs = {n.name: n for n in parent_tree.body if isinstance(n, ast.FunctionDef)}
+    replaced = [n for n in reply_tree.body if isinstance(n, ast.FunctionDef) and n.name in parent_funcs]
+    if not replaced:
+        return reply
+    parent_lines, reply_lines = parent.splitlines(), reply.splitlines()
+    new_src = {n.name: reply_lines[slice(*_node_source(reply_lines, n))] for n in replaced}
+    extras = []
+    for n in reply_tree.body:
+        if (isinstance(n, ast.FunctionDef) and n.name in parent_funcs) or isinstance(n, ast.If):
+            continue
+        a, b = _node_source(reply_lines, n)
+        extras += reply_lines[a:b] + [""]
+    spans = sorted((_node_source(parent_lines, parent_funcs[name]), name) for name in new_src)
+    merged = list(parent_lines)
+    for (a, b), name in reversed(spans):
+        merged[a:b] = new_src[name]
+    first = min(_node_source(merged, n)[0] for n in ast.parse("\n".join(merged)).body
+                if isinstance(n, ast.FunctionDef))
+    merged[first:first] = extras
+    text = "\n".join(merged)
+    try:
+        ast.parse(text)
+    except SyntaxError:
+        return reply
+    return text
+
 
 def extract_note(txt):
     """Extracts note from the part if present."""

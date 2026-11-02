@@ -8,8 +8,11 @@ import time
 os.environ.setdefault("USE_TF", "0")
 os.environ.setdefault("USE_TORCH", "1")
 
+import re
+
 import torch
 import transformers
+from transformers import StoppingCriteria, StoppingCriteriaList
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from src.cfg.constants import *
@@ -18,6 +21,48 @@ app = FastAPI(title="LLM API", version="1.0")
 
 BATCH_SIZE = 16 if torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_memory > 100 * 2**30 else 8  # num of LLM requests to process at once
 BATCH_WAIT_TIME = 2  # max wait time for batch to fill in s
+
+STOP_AT_FIRST_CODE_BLOCK = os.getenv("LLMGE_STOP_AT_CODE_BLOCK", "1") == "1"
+_LANG_TAG = re.compile(r"\s*[A-Za-z0-9_+-]*\s*")
+
+
+def closed_code_block(text):
+    parts = text.split("```")
+    for seg in parts[1:-1]:
+        lines = seg.split("\n")
+        if lines and _LANG_TAG.fullmatch(lines[0]):
+            lines = lines[1:]
+        if "\n".join(lines).strip().count("\n") >= 1:
+            return True
+    return False
+
+
+def runaway(text, max_imports=30, max_repeats=12):
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if sum(line.startswith(("import ", "from ")) for line in lines) >= max_imports:
+        return True
+    counts = {}
+    for line in lines:
+        counts[line] = counts.get(line, 0) + 1
+    return len(lines) > 40 and max(counts.values()) >= max_repeats
+
+
+class FirstCodeBlock(StoppingCriteria):
+    def __init__(self, tokenizer, every=8):
+        self.tokenizer, self.every, self.start, self.calls = tokenizer, every, None, 0
+
+    def __call__(self, input_ids, scores, **kwargs):
+        if self.start is None:
+            self.start = input_ids.shape[1] - 1
+        self.calls += 1
+        done = torch.zeros(input_ids.shape[0], dtype=torch.bool, device=input_ids.device)
+        if self.calls % self.every:
+            return done
+        texts = self.tokenizer.batch_decode(input_ids[:, self.start:], skip_special_tokens=True)
+        for i, text in enumerate(texts):
+            done[i] = closed_code_block(text) or runaway(text)
+        return done
+
 
 class LLMRequest(BaseModel):
     prompt: str
@@ -193,11 +238,15 @@ class LLMModel:
                     start_time = time.time()
                     
                     def run(chunk):
+                        extra = {}
+                        if STOP_AT_FIRST_CODE_BLOCK:
+                            extra["stopping_criteria"] = StoppingCriteriaList([FirstCodeBlock(self.tokenizer)])
                         return self.pipeline(
                             chunk,
                             max_new_tokens=max_new_tokens,
                             temperature=temperature,
                             top_p=top_p,
+                            **extra,
                         )
 
                     try:
