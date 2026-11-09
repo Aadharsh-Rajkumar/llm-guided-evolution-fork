@@ -135,6 +135,11 @@ QISKIT_RAG = os.getenv("LLMGE_QISKIT_RAG", "1") == "1"
 #: Lamarckian weight inheritance: a mutated child warm-starts its first training
 #: start from its parent's trained angles when the parameter count matches.
 INHERIT_WEIGHTS = os.getenv("LLMGE_INHERIT_WEIGHTS", "0") == "1"
+QD_MODE = os.getenv("LLMGE_QD_MODE", "0") == "1"
+QD_DEDUP = os.getenv("LLMGE_QD_DEDUP", "0") == "1"
+QD_GRID_SIZE = int(os.getenv("LLMGE_QD_GRID", "6"))
+QD_NONLOCAL_GATE_RANGE = tuple(float(v) for v in os.getenv("LLMGE_QD_NONLOCAL_RANGE", "0:24").split(":"))
+QD_DEPTH_RANGE = tuple(float(v) for v in os.getenv("LLMGE_QD_DEPTH_RANGE", "0:36").split(":"))
 #: Python run command (uses uv for dependency management)
 #: Eval jobs call the synced project venv directly: no per-job uv lock/sync step.
 UV_PYTHON = f"env -u VIRTUAL_ENV {os.path.join(ROOT_DIR, '.venv', 'bin', 'python')}"

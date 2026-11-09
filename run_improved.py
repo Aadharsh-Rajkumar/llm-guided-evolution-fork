@@ -19,6 +19,7 @@ from functools import partial
 from src.utils.print_utils import print_population, print_scores, box_print, print_job_info
 from src.llm_utils import split_file, retrieve_base_code
 from src.qiskit_rag import last_error, rag_flags
+from src.vlm_utils import CIRCUIT_VIEW
 from src.cfg.constants import *
 from src.cfg import constants
 import glob
@@ -30,6 +31,8 @@ DEFAULT_LLM_MODEL = globals().get("LLM_MIXTRAL", globals().get("LLM_MODEL", None
 AVAILABLE_LLM_MODELS = globals().get("ISLAND_LLMS", [])
 if not AVAILABLE_LLM_MODELS and globals().get("LLM_MODEL"):
     AVAILABLE_LLM_MODELS = [globals()["LLM_MODEL"]]
+QD_MODE = globals().get("QD_MODE", False)
+QD_DEDUP = QD_MODE and globals().get("QD_DEDUP", False)
 
 LLM_SERVER_READY = False
 
@@ -502,6 +505,8 @@ def submit_run(gene_id):
             if parents and parents[-1] != MODEL:
                 python_runline += f" -parent {parents[-1]}"
         config = load_yaml()
+        if QD_DEDUP:
+            python_runline = f'LLMGE_SEEN_FINGERPRINTS={os.path.abspath(QD_SEEN_PATH)} {python_runline}'
         bash_script_content = fill_template_slots(config['python_bash_script'], python_runline)
         return bash_script_content
 
@@ -611,6 +616,17 @@ def check4results(gene_id):
         
         GLOBAL_DATA[gene_id]['status'] = 'completed'
         GLOBAL_DATA[gene_id]['fitness'] = fitness
+        if QD_MODE:
+            try:
+                with open(f'{SOTA_ROOT}/results/{gene_id}_metrics.json', 'r') as file:
+                    metrics = json.load(file)
+                if QD_DEDUP:
+                    GLOBAL_DATA[gene_id]['fingerprint'] = metrics.get('fingerprint')
+                    GLOBAL_DATA[gene_id]['duplicate'] = metrics.get('duplicate', False)
+                if not metrics.get('duplicate'):
+                    GLOBAL_DATA[gene_id]['qd_coords'] = (metrics['two_qubit_gates'], metrics['depth'])
+            except (OSError, KeyError, ValueError) as err:
+                print(f'\t☠ No QD coordinates for {gene_id}: {err}')
         # print(f'Model from Gene: {gene_id} Evaluated')
     elif job_done is False:
         GLOBAL_DATA[gene_id]['status'] = 'completed'
@@ -1009,6 +1025,11 @@ def save_checkpoint(gen, folder_name="checkpoints", global_path=None, checkpoint
                 "GLOBAL_DATA_ANCESTRY": GLOBAL_DATA_ANCESTRY
             }
 
+        if QD_MODE:
+            stored_global_data.setdefault("QD_ARCHIVE", {})[folder_name] = QD_ARCHIVE
+        if QD_DEDUP:
+            stored_global_data.setdefault("QD_SEEN_FINGERPRINTS", {})[folder_name] = QD_SEEN_FINGERPRINTS
+
         with open(global_file, 'wb') as file:
             pickle.dump(stored_global_data, file)
         print(f'Global data saved as {global_file}')
@@ -1072,6 +1093,57 @@ def true_nsga2(pop, k):
     new_pop = tools.selTournamentDCD(pop, k) # mults of 4
     return new_pop
 
+def qd_cell(coords):
+    cell = []
+    for value, (lo, hi) in zip(coords, (QD_NONLOCAL_GATE_RANGE, QD_DEPTH_RANGE)):
+        idx = int((value - lo) / (hi - lo) * QD_GRID_SIZE)
+        cell.append(min(max(idx, 0), QD_GRID_SIZE - 1))
+    return tuple(cell)
+
+def qd_update(archive, population):
+    seen = set(QD_SEEN_FINGERPRINTS)
+    for ind in population:
+        data = GLOBAL_DATA.get(ind[0], {})
+        fitness = data.get('fitness')
+        if data.get('status') != 'completed' or 'qd_coords' not in data or fitness is None or not np.all(np.isfinite(fitness)):
+            continue
+        fp = data.get('fingerprint')
+        if QD_DEDUP and fp is not None:
+            if fp in seen:
+                continue
+            seen.add(fp)
+        cell = qd_cell(data['qd_coords'])
+        holder = archive.get(cell)
+        if holder is None or tuple(fitness) < tuple(holder['fitness']):
+            archive[cell] = {'gene_id': ind[0], 'fitness': tuple(fitness), 'coords': data['qd_coords']}
+    best = min(archive.values(), key=lambda c: c['fitness']) if archive else None
+    best_obj1 = f"{best['fitness'][0]:.4f} ({best['gene_id']})" if best else "n/a"
+    print(f"QD archive: {len(archive)}/{QD_GRID_SIZE ** 2} cells occupied, best obj1: {best_obj1}", flush=True)
+
+def qd_select(archive, k):
+    parents = []
+    for holder in random.choices(list(archive.values()), k=k):
+        ind = creator.Individual([holder['gene_id']])
+        ind.fitness.values = holder['fitness']
+        parents.append(ind)
+    return parents
+
+def qd_write_seen():
+    with open(QD_SEEN_PATH, 'w') as file:
+        file.write('\n'.join(sorted(QD_SEEN_FINGERPRINTS)))
+
+def qd_dedup_update(population):
+    duplicates = 0
+    for ind in population:
+        data = GLOBAL_DATA.get(ind[0], {})
+        if data.get('status') != 'completed':
+            continue
+        duplicates += bool(data.get('duplicate'))
+        if data.get('fingerprint'):
+            QD_SEEN_FINGERPRINTS.add(data['fingerprint'])
+    print(f"QD dedup: {duplicates} duplicates skipped, {len(QD_SEEN_FINGERPRINTS)} fingerprints seen", flush=True)
+    qd_write_seen()
+
 def create_population(n, llm_model):
     individual_func = partial(toolbox.individual, llm_model=llm_model)
     return tools.initRepeat(list, individual_func, n)
@@ -1131,6 +1203,9 @@ GLOBAL_DATA = {}
 GLOBAL_DATA_HIST = {}
 GLOBAL_DATA_ANCESTRY = {}
 GLOBAL_DATA_ANCESTRY[MODEL] = {'GENES':[MODEL], 'MUTATE_TYPE':["CREATED"]}
+QD_ARCHIVE = {}
+QD_SEEN_FINGERPRINTS = set()
+QD_SEEN_PATH = None
 
 # Main Evolution Loop
 if __name__ == "__main__":
@@ -1163,7 +1238,8 @@ if __name__ == "__main__":
     RUN_FLAGS = {"qiskit_rag": QISKIT_RAG, "rag_components": rag_flags() if QISKIT_RAG else {},
                  "llm_output_tokens": LLM_OUTPUT_TOKENS, "function_reply": FUNCTION_REPLY,
                  "objectives": os.getenv("QVQC_OBJECTIVES", "ce,wgates"),
-                 "random_seed": os.getenv("LLMGE_RANDOM_SEED")}
+                 "random_seed": os.getenv("LLMGE_RANDOM_SEED"),
+                 "circuit_view": CIRCUIT_VIEW, "qd_mode": QD_MODE, "qd_dedup": QD_DEDUP}
     print(f"RUN FLAGS: {json.dumps(RUN_FLAGS)}", flush=True)
     os.makedirs(args.global_path, exist_ok=True)
     with open(os.path.join(args.global_path, "run_flags.json"), "w") as file:
@@ -1175,6 +1251,8 @@ if __name__ == "__main__":
         GLOBAL_DATA = global_data["GLOBAL_DATA"]
         GLOBAL_DATA_HIST = global_data["GLOBAL_DATA_HIST"]
         GLOBAL_DATA_ANCESTRY = global_data["GLOBAL_DATA_ANCESTRY"]
+        QD_ARCHIVE = global_data.get("QD_ARCHIVE", {}).get(args.checkpoints, {})
+        QD_SEEN_FINGERPRINTS = global_data.get("QD_SEEN_FINGERPRINTS", {}).get(args.checkpoints, set())
         population = population_data["population"]
         hof = population_data["hof"]
     else:
@@ -1191,7 +1269,14 @@ if __name__ == "__main__":
     for ind in population:
         ind.fitness.values = PLACEHOLDER_FITNESS
         
+    if QD_DEDUP:
+        QD_SEEN_PATH = os.path.join(OUTPUT_DIR, f"seen_fingerprints_{os.path.basename(os.path.dirname(os.path.normpath(args.checkpoints)))}.txt")
+        qd_write_seen()
     check_and_update_fitness(population)
+    if QD_MODE:
+        qd_update(QD_ARCHIVE, population)
+    if QD_DEDUP:
+        qd_dedup_update(population)
     if not population_data:
         population = top_up(population, llm_model)
         hof.update(population)
@@ -1232,7 +1317,10 @@ if __name__ == "__main__":
         elites = tools.selSPEA2(population, num_elites)
         
         # Select the next generation's parents
-        if len(population) < population_size:
+        if QD_MODE and QD_ARCHIVE:
+            print(f"Selecting {population_size} offspring from {len(QD_ARCHIVE)} archive cells")
+            offspring = qd_select(QD_ARCHIVE, population_size)
+        elif len(population) < population_size:
             print(f"Selecting {len(population)} offspring")
             offspring = toolbox.select(population, len(population) - (len(population) % 4))
         else:
@@ -1288,6 +1376,10 @@ if __name__ == "__main__":
                 if GLOBAL_DATA[gene_id]['status'] == "completed":
             """
            
+        if QD_MODE:
+            for ind in offspring:
+                if ind[0] not in GLOBAL_DATA and ind[0] in GLOBAL_DATA_HIST:
+                    GLOBAL_DATA[ind[0]] = GLOBAL_DATA_HIST[ind[0]]
         # Evaluate the individuals with an invalid fitness
         invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
         fitnesses = map(toolbox.evaluate, invalid_ind)
@@ -1304,6 +1396,10 @@ if __name__ == "__main__":
         # Gather all the fitnesses in one list and print the stats
         print_scores(population, FITNESS_WEIGHTS)
         hof.update(population)
+        if QD_MODE:
+            qd_update(QD_ARCHIVE, population)
+        if QD_DEDUP:
+            qd_dedup_update(population)
         save_checkpoint(gen, folder_name=args.checkpoints, global_path=args.global_path)
         LINKED_GENES = {}
         # mutate x prompts

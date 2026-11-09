@@ -25,18 +25,28 @@ export LLMGE_RANDOM_SEED=$SEED
 export QVQC_OBJECTIVES=${QVQC_OBJECTIVES:-ce,wlive,cesd}
 LOGS=run_job_outputs/islands
 echo "pair $TAG seed=$SEED objectives=${QVQC_OBJECTIVES:-ce,wgates} server file=${LLMGE_HOSTNAME_FILE:-hostname.log} host=$(hostname)"
-env | grep -E '^(LLMGE_RAG_|LLMGE_LONG_OUTPUT|LLMGE_FUNCTION_REPLY|LLM_OUTPUT_TOKENS)' | sort
+env | grep -E '^(LLMGE_RAG_|LLMGE_LONG_OUTPUT|LLMGE_FUNCTION_REPLY|LLM_OUTPUT_TOKENS|LLMGE_CIRCUIT_VIEW|LLMGE_QD_)' | sort
+echo "merged arm: ${MERGED:-0} view=${MERGED_VIEW:-ascii}"
 
 if [ ! -f "quantum_runs/qvqc_init_$TAG/checkpoints/checkpoint_gen_0.pkl" ]; then
     RUN=qvqc_init_$TAG LLMGE_INIT_ONLY=1 LLMGE_QISKIT_RAG=0 \
         bash quantum_island.sbatch >> "$LOGS/qvqc_pair-init_$TAG-$SLURM_JOB_ID.out" 2>&1 || exit 1
 fi
 RUN=qvqc_rag_$TAG INIT_FROM=qvqc_init_$TAG LLMGE_QISKIT_RAG=1 \
+    LLMGE_CIRCUIT_VIEW=off LLMGE_QD_MODE=0 LLMGE_QD_DEDUP=0 \
     bash quantum_island.sbatch >> "$LOGS/qvqc_pair-rag_$TAG-$SLURM_JOB_ID.out" 2>&1 &
 RAG=$!
 RUN=qvqc_norag_$TAG INIT_FROM=qvqc_init_$TAG LLMGE_QISKIT_RAG=0 \
+    LLMGE_CIRCUIT_VIEW=off LLMGE_QD_MODE=0 LLMGE_QD_DEDUP=0 \
     bash quantum_island.sbatch >> "$LOGS/qvqc_pair-norag_$TAG-$SLURM_JOB_ID.out" 2>&1 &
 NORAG=$!
+if [ "${MERGED:-0}" = "1" ]; then
+    RUN=qvqc_merged_$TAG INIT_FROM=qvqc_init_$TAG LLMGE_QISKIT_RAG=1 \
+        LLMGE_CIRCUIT_VIEW=${MERGED_VIEW:-ascii} LLMGE_QD_MODE=1 LLMGE_QD_DEDUP=1 \
+        bash quantum_island.sbatch >> "$LOGS/qvqc_pair-merged_$TAG-$SLURM_JOB_ID.out" 2>&1 &
+    MERGED_PID=$!
+fi
 wait $RAG; echo "rag arm exited $?"
 wait $NORAG; echo "no-rag arm exited $?"
+[ -n "$MERGED_PID" ] && { wait $MERGED_PID; echo "merged arm exited $?"; }
 for j in $CANCEL_JOBS; do scancel "$j" && echo "cancelled $j"; done

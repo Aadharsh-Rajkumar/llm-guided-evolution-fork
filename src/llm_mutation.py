@@ -21,6 +21,7 @@ from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf,
                        extract_note, clean_code_from_llm, retrieve_base_code,
                        function_reply_instruction, merge_function_reply)
 from qiskit_rag import build_rag_section, recent_failures, rag_flags
+from vlm_utils import CIRCUIT_VIEW, circuit_note
 import json
 
 def validate_generated_chunk(code_from_llm):
@@ -73,14 +74,17 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
         raise ValueError(f"Prompt template {fname} must contain a literal {{}} code placeholder")
     txt2llm, rag_sources, failures, long_block = build_prompt(template_txt, code2llm, augment_idx,
                                                               qiskit_rag, failure_log)
+    view_note = circuit_note(input_filename, os.path.join(SOTA_ROOT, "renders")) if CIRCUIT_VIEW != "off" else ""
+    txt2llm = view_note + txt2llm
     print(f"Run flags: rag={bool(qiskit_rag)} {rag_flags() if qiskit_rag else {}} "
-          f"output_tokens={LLM_OUTPUT_TOKENS} function_reply={long_block}", flush=True)
+          f"output_tokens={LLM_OUTPUT_TOKENS} function_reply={long_block} "
+          f"circuit_view={CIRCUIT_VIEW}", flush=True)
     if qiskit_rag:
         print(f"RAG block {augment_idx}: sources {', '.join(rag_sources)}; "
               f"{len(failures)} recent error(s) fed back", flush=True)
     Path(f"{output_filename}.rag.json").write_text(json.dumps(
         {"op": "mutation", "block": augment_idx, "rag": bool(qiskit_rag), "sources": rag_sources,
-         "function_reply": long_block}))
+         "function_reply": long_block, "circuit_view": CIRCUIT_VIEW, "view_added": bool(view_note)}))
     code_from_llm = generate_augmented_code(txt2llm, augment_idx-1, apply_quality_control,
                                             top_p, llm_model, temperature)
     

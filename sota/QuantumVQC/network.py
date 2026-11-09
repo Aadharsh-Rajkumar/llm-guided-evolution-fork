@@ -32,6 +32,8 @@ training (like EXAQC's Table 1 and ExquisiteNetV2), but test only goes into
 """
 
 import argparse
+import ast
+import hashlib
 import json
 import os
 import sys
@@ -424,7 +426,21 @@ def emit_representations(qc, out_dir, gene_id, arms=("qasm", "ascii", "image")):
     return written
 
 
-def main(n_starts=N_STARTS, objectives=OBJECTIVES):
+def fingerprint(qc, xp, wp, X):
+    h = hashlib.md5()
+    for s in (7, 11):
+        w = np.random.default_rng(s).uniform(0, 2 * np.pi, len(wp))
+        h.update(np.round(forward_batch(qc, xp, wp, X[:24], w), 4).tobytes())
+    h.update(str(gate_count(qc)).encode())
+    training_block = open(__file__).read().split("# --" "OPTION--")[-1]
+    try:
+        h.update(ast.dump(ast.parse(training_block)).encode())
+    except SyntaxError:
+        h.update(training_block.encode())
+    return h.hexdigest()
+
+
+def main(n_starts=N_STARTS, objectives=OBJECTIVES, fingerprint=fingerprint):
     # n_starts is bound here, when the protected header runs, so a block that
     # rebinds N_STARTS (or OBJECTIVES) cannot change how an individual is scored.
     global TRAIN_BUDGET_EVALS, SEED
@@ -454,6 +470,16 @@ def main(n_starts=N_STARTS, objectives=OBJECTIVES):
         raise ValueError("circuit has no trainable parameters")
     if qc.num_qubits != N_QUBITS:
         raise ValueError(f"circuit has {qc.num_qubits} qubits, expected {N_QUBITS}")
+
+    seen_path = os.environ.get("LLMGE_SEEN_FINGERPRINTS")
+    fp = fingerprint(qc, xp, wp, X_tr) if seen_path else None
+    if fp is not None and os.path.exists(seen_path) and fp in open(seen_path).read().split():
+        write_results(args.out_dir, args.gene_id, [float("inf")] * len(objectives))
+        with open(os.path.join(args.out_dir, f"{args.gene_id}_metrics.json"), "w") as f:
+            json.dump({"gene_id": args.gene_id, "duplicate": True, "fingerprint": fp,
+                       "gates": gate_count(qc)}, f, indent=1, sort_keys=True)
+        print(f"gene {args.gene_id}: behaves like a circuit already scored this run, not trained")
+        return
 
     initial_weights = None
     if args.initial_weights and os.path.exists(args.initial_weights):
@@ -586,6 +612,8 @@ def main(n_starts=N_STARTS, objectives=OBJECTIVES):
         "fast_sim": _compiled(qc, xp, wp) is not None,
         "seconds": time.perf_counter() - t0,
     }
+    if fp is not None:
+        metrics["fingerprint"] = fp
     mpath = os.path.join(args.out_dir, f"{args.gene_id}_metrics.json")
     with open(mpath, "w") as f:
         json.dump(metrics, f, indent=1, sort_keys=True)
