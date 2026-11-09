@@ -51,11 +51,20 @@ def clean_code_from_llm(code_from_llm):
         if body:
             # Segments at even k sit inside a fence pair; prefer them over the
             # text between fences, which is usually prose.
-            candidates.append((k % 2 == 0, len(body), body))
+            candidates.append((parses_as_code(body), k % 2 == 0, len(body), body))
     if not candidates:
         print("Runtime Error: No code was generated or the format is incorrect.")
         return "ERROR"
-    return max(candidates)[2]
+    return max(candidates)[3]
+
+
+def parses_as_code(body):
+    try:
+        tree = ast.parse(textwrap.dedent(body))
+    except (SyntaxError, ValueError):
+        return False
+    return any(not (isinstance(node, ast.Expr) and isinstance(node.value, (ast.Name, ast.Constant)))
+               for node in tree.body)
 
 def get_llm_code_generator(llm_model):
     # Prefer the local uvicorn-hosted model when configured
@@ -157,6 +166,13 @@ def function_reply_instruction(code):
     return (f"\n\nThis block is long.{listed} Reply with only the complete definitions of the functions "
             "you change (keep their names and signatures) and any new helper functions; every function you "
             "do not return is kept unchanged.")
+
+
+def output_instruction(long_block):
+    if not OUTPUT_LINE:
+        return ""
+    reply = "only the functions you change" if long_block else "the complete modified code block"
+    return f"\n\nReply with {reply} in one ```python fenced block and nothing after it."
 
 
 def _node_source(lines, node):

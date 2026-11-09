@@ -43,6 +43,7 @@ LONG_OUTPUT = os.getenv("LLMGE_LONG_OUTPUT", "1") == "1"
 LLM_OUTPUT_TOKENS = int(os.getenv("LLM_OUTPUT_TOKENS", "2048" if LONG_OUTPUT else "850"))
 FUNCTION_REPLY = os.getenv("LLMGE_FUNCTION_REPLY", "1") == "1"
 FUNCTION_REPLY_MIN_LINES = int(os.getenv("LLMGE_FUNCTION_REPLY_MIN_LINES", "60"))
+OUTPUT_LINE = os.getenv("LLMGE_OUTPUT_LINE", "1") == "1"
 LLM_RETRY_SECONDS = int(os.getenv("LLM_RETRY_SECONDS", "7200"))
 
 CLUSTER = "pace-ice"

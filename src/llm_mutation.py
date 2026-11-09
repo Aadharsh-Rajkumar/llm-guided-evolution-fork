@@ -19,7 +19,7 @@ from utils.print_utils import box_print
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, generate_augmented_code, 
                        extract_note, clean_code_from_llm, retrieve_base_code,
-                       function_reply_instruction, merge_function_reply)
+                       function_reply_instruction, merge_function_reply, output_instruction)
 from qiskit_rag import build_rag_section, recent_failures, rag_flags
 from vlm_utils import CIRCUIT_VIEW, circuit_note
 import json
@@ -44,9 +44,10 @@ def build_prompt(template_txt, code2llm, block, qiskit_rag, failure_log):
         flags = rag_flags()
         goal = template_txt.split("```")[0]
         failures = recent_failures(failure_log, block) if flags["error_feedback"] else []
-        reply = "the changed functions" if long_block else "the complete modified code block"
+        reply = None if OUTPUT_LINE else ("the changed functions" if long_block else "the complete modified code block")
         rag_txt, rag_sources = build_rag_section(goal, code2llm, failures, flags=flags, reply=reply)
         txt2llm += rag_txt
+    txt2llm += output_instruction(bool(long_block))
     return txt2llm, rag_sources, failures, bool(long_block)
 
 
@@ -78,7 +79,7 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     txt2llm = view_note + txt2llm
     print(f"Run flags: rag={bool(qiskit_rag)} {rag_flags() if qiskit_rag else {}} "
           f"output_tokens={LLM_OUTPUT_TOKENS} function_reply={long_block} "
-          f"circuit_view={CIRCUIT_VIEW}", flush=True)
+          f"circuit_view={CIRCUIT_VIEW} output_line={OUTPUT_LINE}", flush=True)
     if qiskit_rag:
         print(f"RAG block {augment_idx}: sources {', '.join(rag_sources)}; "
               f"{len(failures)} recent error(s) fed back", flush=True)

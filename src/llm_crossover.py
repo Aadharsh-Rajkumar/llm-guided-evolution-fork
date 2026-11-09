@@ -13,7 +13,7 @@ from utils.print_utils import box_print
 from llm_utils import (split_file, submit_mixtral, submit_mixtral_hf, 
                        llm_code_qc, str2bool, extract_note, generate_augmented_code, 
                        clean_code_from_llm, retrieve_base_code,
-                       function_reply_instruction, merge_function_reply)
+                       function_reply_instruction, merge_function_reply, output_instruction)
 from qiskit_rag import build_rag_section, recent_failures, rag_flags
 import json
 from pathlib import Path
@@ -27,10 +27,11 @@ def build_prompt(template_txt, x, y, block, qiskit_rag, failure_log):
     flags = rag_flags()
     if qiskit_rag and flags["crossover"]:
         failures = recent_failures(failure_log, block) if flags["error_feedback"] else []
-        reply = "the changed functions" if long_block else "the complete modified code block"
+        reply = None if OUTPUT_LINE else ("the changed functions" if long_block else "the complete modified code block")
         rag_txt, rag_sources = build_rag_section(
             "Combine two Qiskit circuit blocks", f"{x}\n{y}", failures, flags=flags, reply=reply)
         txt2llm += rag_txt
+    txt2llm += output_instruction(bool(long_block))
     return txt2llm, rag_sources, failures, bool(long_block)
 
 
@@ -77,7 +78,7 @@ def augment_network(input_filename_x, input_filename_y, output_filename,
     txt2llm, rag_sources, failures, long_block = build_prompt(template_txt, x, y, augment_idx + 1,
                                                               qiskit_rag, failure_log)
     print(f"Run flags: rag={bool(qiskit_rag)} {rag_flags() if qiskit_rag else {}} "
-          f"output_tokens={LLM_OUTPUT_TOKENS} function_reply={long_block}", flush=True)
+          f"output_tokens={LLM_OUTPUT_TOKENS} function_reply={long_block} output_line={OUTPUT_LINE}", flush=True)
     if qiskit_rag and rag_sources:
         print(f"RAG block {augment_idx + 1}: sources {', '.join(rag_sources)}; "
               f"{len(failures)} recent error(s) fed back", flush=True)

@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT))
 
 import llm_crossover
 import llm_mutation
-from llm_utils import merge_function_reply
+from llm_utils import merge_function_reply, output_instruction
 from qiskit_rag import RAG_FLAG_ENV, REUPLOAD_NOTE, build_rag_section, rag_flags
 
 SEED = ROOT / "sota" / "QuantumVQC" / "network.py"
@@ -72,7 +72,10 @@ def test_each_component_alone(monkeypatch, failure_log, component, marker):
     text = TEMPLATES[0].read_text()
     prompt = llm_mutation.build_prompt(text, BLOCKS[4], 4, True, failure_log)[0]
     plain = llm_mutation.build_prompt(text, BLOCKS[4], 4, False, failure_log)[0]
-    assert marker in prompt and prompt.startswith(plain) and prompt != plain
+    ending = output_instruction(False)
+    assert prompt.endswith(ending) and plain.endswith(ending)
+    head, base = prompt[:len(prompt) - len(ending)], plain[:len(plain) - len(ending)]
+    assert marker in head and head.startswith(base) and head != base
     others = [m for c, m in [("retrieval", "BM25="), ("pin_api", "qiskit_imports_api.md; pinned"),
                              ("pin_gate_budget", "gate_budget.md; pinned"), ("contract", "Block contract"),
                              ("error_feedback", "crashed with these errors")] if c != component]
@@ -107,3 +110,28 @@ def test_function_reply_merge_keeps_unreturned_functions():
     assert merged.count("def train_angles") == 1 and "return None" in merged
     full = "\n".join(l for l in parent.splitlines() if not l.startswith("MAX_ITER"))
     assert "MAX_ITER = " in merge_function_reply(parent, full)
+
+
+@pytest.mark.parametrize("block", range(1, len(BLOCKS)))
+def test_both_arms_end_with_the_same_output_line(monkeypatch, failure_log, block):
+    set_flags(monkeypatch, retrieval=True, pin_api=True, pin_gate_budget=True, contract=True,
+              error_feedback=True, reupload_gating=True)
+    text = TEMPLATES[0].read_text()
+    rag, *_ = llm_mutation.build_prompt(text, BLOCKS[block], block, True, failure_log)
+    norag, *_ = llm_mutation.build_prompt(text, BLOCKS[block], block, False, failure_log)
+    last = norag.rstrip().splitlines()[-1]
+    assert last.startswith("Reply with ") and last.endswith("nothing after it.")
+    assert rag.rstrip().splitlines()[-1] == last
+    assert rag.count("Reply with") == norag.count("Reply with")
+
+
+def test_output_line_off_restores_the_old_prompts(monkeypatch, failure_log):
+    monkeypatch.setattr(llm_mutation, "OUTPUT_LINE", False)
+    import llm_utils
+    monkeypatch.setattr(llm_utils, "OUTPUT_LINE", False)
+    set_flags(monkeypatch, retrieval=True, pin_api=True, pin_gate_budget=True, contract=True)
+    text = TEMPLATES[0].read_text()
+    rag, *_ = llm_mutation.build_prompt(text, BLOCKS[1], 1, True, failure_log)
+    norag, *_ = llm_mutation.build_prompt(text, BLOCKS[1], 1, False, failure_log)
+    assert rag.rstrip().endswith("Reply with the complete modified code block in one ```python fenced block.")
+    assert "nothing after it" not in norag

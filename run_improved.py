@@ -1237,6 +1237,7 @@ if __name__ == "__main__":
     FAILURE_LOG = os.path.abspath(os.path.join(args.global_path, "failures.jsonl"))
     RUN_FLAGS = {"qiskit_rag": QISKIT_RAG, "rag_components": rag_flags() if QISKIT_RAG else {},
                  "llm_output_tokens": LLM_OUTPUT_TOKENS, "function_reply": FUNCTION_REPLY,
+                 "output_line": OUTPUT_LINE,
                  "objectives": os.getenv("QVQC_OBJECTIVES", "ce,wgates"),
                  "random_seed": os.getenv("LLMGE_RANDOM_SEED"),
                  "circuit_view": CIRCUIT_VIEW, "qd_mode": QD_MODE, "qd_dedup": QD_DEDUP}

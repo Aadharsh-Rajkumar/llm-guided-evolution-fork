@@ -184,8 +184,9 @@ def build_rag_section(goal: str, code: str, failures: list[str] | None = None,
     if failures:
         text += ("\n\nRecent mutations of this block crashed with these errors; "
                  "do not repeat them:\n" + "\n".join(f"- {e}" for e in failures))
-    text += (f"\n\nEnd of the reference notes. Reply with {reply} "
-             "in one ```python fenced block.")
+    text += "\n\nEnd of the reference notes."
+    if reply:
+        text += f" Reply with {reply} in one ```python fenced block."
     return text, pinned + [item.source for item in results]
 
 
