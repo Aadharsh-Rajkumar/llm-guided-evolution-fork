@@ -501,13 +501,15 @@ def main(n_starts=N_STARTS, objectives=OBJECTIVES, fingerprint=fingerprint):
     base_seed, starts, curves = SEED, [], []
     for k in range(args.n_starts):
         SEED = base_seed + k               # train_angles reads SEED for its starting angles
+        start_angles = np.random.default_rng(SEED).uniform(0, 2 * np.pi, len(wp))
         _PASSES = 0
         _BEST = [float("inf"), None]
         _TRAINING_CURVE.clear()
         _COUNTING = True
         try:
             w = train_angles(qc, xp, wp, X_tr, y_tr, X_va, y_va,
-                             initial_weights=initial_weights if k == 0 else None,
+                             initial_weights=initial_weights if k == 0 and initial_weights is not None
+                             else start_angles,
                              optimizer=args.optimizer)
         except BudgetSpent:
             if _BEST[1] is None:
@@ -551,13 +553,16 @@ def main(n_starts=N_STARTS, objectives=OBJECTIVES, fingerprint=fingerprint):
     val_ce_sd = float(np.std([s["val_cross_entropy"] for s in starts]))
     prior = np.bincount(y_va, minlength=N_CLASSES) / len(y_va)
     no_skill_ce = float(-np.sum(prior[prior > 0] * np.log(prior[prior > 0])))
-    if val_ce >= no_skill_ce:
+    majority_rate = float(prior.max())
+    no_skill = val_ce >= no_skill_ce or val_acc <= majority_rate + 1e-9
+    ignored_starts = len(starts) > 1 and all(s["weights"] == starts[0]["weights"] for s in starts[1:])
+    if no_skill:
         obj2 = MAX_GATE_COST
     objs = [obj1, obj2]
     if len(objectives) > 2:
         if objectives[2] != "cesd":
             raise ValueError(f"unknown third objective {objectives[2]!r}")
-        objs.append(val_ce_sd if val_ce < no_skill_ce else NO_SKILL_SPREAD)
+        objs.append(NO_SKILL_SPREAD if no_skill or ignored_starts else val_ce_sd)
 
     path = write_results(args.out_dir, args.gene_id, objs, extra=val_ce)
     print(f"gene {args.gene_id}")
@@ -584,7 +589,8 @@ def main(n_starts=N_STARTS, objectives=OBJECTIVES, fingerprint=fingerprint):
     metrics = {
         "gene_id": args.gene_id,
         "objectives": list(objectives), "obj1": obj1, "obj2": obj2, "objs": objs,
-        "no_skill_ce": no_skill_ce,
+        "no_skill_ce": no_skill_ce, "majority_rate": majority_rate, "no_skill": no_skill,
+        "ignored_start_angles": ignored_starts,
         "obj1_val_error": 1.0 - val_acc, "obj2_gates": gate_count(qc),
         "val_accuracy": val_acc, "val_cross_entropy": val_ce,
         "val_soft_accuracy": avg["val_soft_accuracy"],
