@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=qvqc_pair
 #SBATCH -p pace-cpu,ice-cpu,ice-bw-cpu
-#SBATCH -t 14:00:00
-#SBATCH --mem 32G
-#SBATCH -c 4
+#SBATCH -t 18:00:00
+#SBATCH --mem 48G
+#SBATCH -c 8
 #SBATCH -N 1
 #SBATCH --output=run_job_outputs/islands/qvqc_pair-%x-%j.out
 # One trial of the RAG vs no-RAG study in a single job (2026-10-18): build and evaluate
@@ -20,12 +20,13 @@ cd "$SLURM_SUBMIT_DIR"
 : "${SEED:?set SEED}"
 TAG=${TAG:-s$SEED}
 export LLMGE_RANDOM_SEED=$SEED
+export LLMGE_LOCAL_JOBS=${LLMGE_LOCAL_JOBS:-1}
 # The study's three objectives. Set any other list in the submitting shell, not in
 # --export: sbatch --export splits on commas, so "QVQC_OBJECTIVES=ce,wgates" arrives as "ce".
 export QVQC_OBJECTIVES=${QVQC_OBJECTIVES:-ce,wlive,cesd}
 LOGS=run_job_outputs/islands
 echo "pair $TAG seed=$SEED objectives=${QVQC_OBJECTIVES:-ce,wgates} server file=${LLMGE_HOSTNAME_FILE:-hostname.log} host=$(hostname)"
-env | grep -E '^(LLMGE_RAG_|LLMGE_LONG_OUTPUT|LLMGE_FUNCTION_REPLY|LLM_OUTPUT_TOKENS|LLMGE_CIRCUIT_VIEW|LLMGE_QD_)' | sort
+env | grep -E '^(LLMGE_RAG_|LLMGE_LONG_OUTPUT|LLMGE_FUNCTION_REPLY|LLM_OUTPUT_TOKENS|LLMGE_CIRCUIT_VIEW|LLMGE_QD_|LLMGE_OUTPUT_LINE|LLMGE_LOCAL_)' | sort
 echo "merged arm: ${MERGED:-0} view=${MERGED_VIEW:-ascii}"
 
 if [ ! -f "quantum_runs/qvqc_init_$TAG/checkpoints/checkpoint_gen_0.pkl" ]; then

@@ -25,6 +25,19 @@ BATCH_SIZE = 16 if torch.cuda.is_available() and torch.cuda.get_device_propertie
 BATCH_WAIT_TIME = 2  # max wait time for batch to fill in s
 
 STOP_AT_FIRST_CODE_BLOCK = os.getenv("LLMGE_STOP_AT_CODE_BLOCK", "1") == "1"
+SPLIT_LONG_BATCHES = os.getenv("LLMGE_SPLIT_LONG_BATCHES", "1") == "1"
+LONG_PROMPT_MARKER = "This block is long."
+LONG_MAX_WAIT = float(os.getenv("LLMGE_LONG_MAX_WAIT", "600"))
+
+
+def pick_batch(waiting, now, batch_size, split=SPLIT_LONG_BATCHES, max_wait=LONG_MAX_WAIT):
+    if not split:
+        return list(range(min(batch_size, len(waiting))))
+    longs = [i for i, (req, _, _) in enumerate(waiting) if LONG_PROMPT_MARKER in req["prompt"]]
+    shorts = [i for i in range(len(waiting)) if i not in set(longs)]
+    if longs and (len(longs) >= batch_size or not shorts or now - waiting[longs[0]][2] >= max_wait):
+        return longs[:batch_size]
+    return shorts[:batch_size]
 _LANG_TAG = re.compile(r"\s*[A-Za-z0-9_+-]*\s*")
 
 
@@ -186,6 +199,7 @@ class LLMModel:
         print("pipeline created", flush=True)
         
         self.request_queue = asyncio.Queue() # queue for holding requests to process
+        self.waiting = []
         self.batch_task = None # current task
         self.batch_lock = asyncio.Lock() # lock for
         self.batch_id = 0
@@ -207,30 +221,35 @@ class LLMModel:
                 futures = []
                 
                 try:
-                    # check queue for requests
-                    request, future = await self.request_queue.get()
-                    batch.append(request)
-                    futures.append(future)
-                    
-                    # try to fill the batch until BATCH_SIZE or timeout
+                    if not self.waiting:
+                        request, future = await self.request_queue.get()
+                        self.waiting.append((request, future, time.time()))
                     batch_start_time = time.time()
-                    while len(batch) < BATCH_SIZE and (time.time() - batch_start_time) < BATCH_WAIT_TIME:
+                    while len(self.waiting) < BATCH_SIZE and (time.time() - batch_start_time) < BATCH_WAIT_TIME:
                         try:
                             req, fut = await asyncio.wait_for(
                                 self.request_queue.get(),
                                 timeout=max(0, BATCH_WAIT_TIME - (time.time() - batch_start_time))
                             )
-                            batch.append(req)
-                            futures.append(fut)
+                            self.waiting.append((req, fut, time.time()))
                         except asyncio.TimeoutError:
                             break
+                    while not self.request_queue.empty():
+                        req, fut = self.request_queue.get_nowait()
+                        self.waiting.append((req, fut, time.time()))
+                    chosen = pick_batch(self.waiting, time.time(), BATCH_SIZE)
+                    picked = set(chosen)
+                    batch = [self.waiting[i][0] for i in chosen]
+                    futures = [self.waiting[i][1] for i in chosen]
+                    self.waiting = [w for i, w in enumerate(self.waiting) if i not in picked]
                     
                     batch_size = len(batch)
                     self.batch_id += 1
                     batch_id = self.batch_id
                     print(
                         f"Processing batch {batch_id} of {batch_size} requests "
-                        f"(queued after collect: {self.request_queue.qsize()})",
+                        f"({sum(LONG_PROMPT_MARKER in r['prompt'] for r in batch)} long; "
+                        f"waiting after collect: {len(self.waiting) + self.request_queue.qsize()})",
                         flush=True,
                     )
                     
@@ -275,7 +294,7 @@ class LLMModel:
                     response_time = round(time.time() - start_time, 2)
                     print(
                         f"Finished batch {batch_id} in {response_time}s "
-                        f"(queued after finish: {self.request_queue.qsize()})",
+                        f"(queued after finish: {len(self.waiting) + self.request_queue.qsize()})",
                         flush=True,
                     )
 

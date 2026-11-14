@@ -96,11 +96,12 @@ CUF_TIMEOUT = 3600 * 30  # 30 hours
 
 #: Whether to run llm-ge locally (True) or distribute across a slurm cluster (False)
 LOCAL = False
+LOCAL_JOBS = os.getenv("LLMGE_LOCAL_JOBS", "0") == "1"
 if LOCAL:
 	RUN_COMMAND = 'bash'
 	DELAYED_CHECK = False
 else:
-	RUN_COMMAND = 'sbatch'
+	RUN_COMMAND = os.path.join(ROOT_DIR, 'local_sbatch.sh') if LOCAL_JOBS else 'sbatch'
 	DELAYED_CHECK = True
 
 #: Whether host uses macOS

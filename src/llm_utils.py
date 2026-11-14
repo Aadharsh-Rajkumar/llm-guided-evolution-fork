@@ -5,6 +5,7 @@ sys.path.append("src")
 import re
 import os
 import glob
+import random
 import time
 import numpy as np
 import transformers
@@ -598,11 +599,9 @@ def submit_gemma3(txt2gemma, max_new_tokens=764, top_p=0.15, temperature=0.1,
         return output_txt, generate_text
     
 def get_llm_server_hostname():
-    hostname = None
-    hostname_file_path = HOSTNAME_DIR 
-    with open(hostname_file_path, 'r') as f:
-        hostname = f.readline().strip() 
-    return hostname
+    with open(HOSTNAME_DIR, 'r') as f:
+        hosts = [line.strip() for line in f if line.strip()]
+    return random.choice(hosts) if hosts else ""
 
 def llm_server_address(hostname):
     return hostname if ":" in hostname else f"{hostname}:{PORT}"
