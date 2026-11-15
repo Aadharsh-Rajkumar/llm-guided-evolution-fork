@@ -1,5 +1,0 @@
-numpy
-torch
-tqdm
-hydra-core==1.2
-omegaconf

@@ -14,7 +14,6 @@ Welcome to the documentation for Large Language Model \(LLM\) Guided Evolution \
    :caption: Contents:
 
    seed_algorithms
-   point_cloud
    island_migration
    set_up_test_env
    github_actions_runner

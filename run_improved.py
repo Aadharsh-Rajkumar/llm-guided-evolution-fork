@@ -26,7 +26,7 @@ import glob
 
 # Runtime-configurable prompt glob and LLM defaults
 global PROMPT_GLOB
-PROMPT_GLOB = PROMPTS if "PROMPTS" in globals() else "templates/Testing/Normal/**/*.txt"
+PROMPT_GLOB = PROMPTS
 DEFAULT_LLM_MODEL = globals().get("LLM_MIXTRAL", globals().get("LLM_MODEL", None))
 AVAILABLE_LLM_MODELS = globals().get("ISLAND_LLMS", [])
 if not AVAILABLE_LLM_MODELS and globals().get("LLM_MODEL"):
@@ -160,7 +160,7 @@ def generate_template(PROB_EOT, GEN_COUNT, TOP_N_GENES, SOTA_ROOT, SEED_NETWORK,
         mute_type = os.path.basename(template_path).split('.')[0]  # Assuming the file extension needs to be removed
         with open(template_path, 'r') as file:
             template_txt = file.read()
-        rules_path = globals().get("CONSTANT_RULES_PATH", "templates/ConstantRules.txt")
+        rules_path = CONSTANT_RULES_PATH
         if not os.path.isabs(rules_path):
             rules_path = os.path.join(ROOT_DIR, rules_path)
         with open(rules_path, 'r') as file:
@@ -1240,7 +1240,10 @@ if __name__ == "__main__":
                  "output_line": OUTPUT_LINE, "local_jobs": LOCAL_JOBS,
                  "objectives": os.getenv("QVQC_OBJECTIVES", "ce,wgates"),
                  "random_seed": os.getenv("LLMGE_RANDOM_SEED"),
-                 "circuit_view": CIRCUIT_VIEW, "qd_mode": QD_MODE, "qd_dedup": QD_DEDUP}
+                 "circuit_view": CIRCUIT_VIEW, "qd_mode": QD_MODE, "qd_dedup": QD_DEDUP,
+                 "generations": num_generations, "start_population": start_population_size,
+                 "population": population_size, "elites": num_elites, "prob_eot": PROB_EOT,
+                 "eot_elites": NUM_EOT_ELITES}
     print(f"RUN FLAGS: {json.dumps(RUN_FLAGS)}", flush=True)
     os.makedirs(args.global_path, exist_ok=True)
     with open(os.path.join(args.global_path, "run_flags.json"), "w") as file:

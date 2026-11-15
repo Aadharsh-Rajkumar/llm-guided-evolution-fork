@@ -24,19 +24,9 @@ from qiskit_rag import build_rag_section, recent_failures, rag_flags
 from vlm_utils import CIRCUIT_VIEW, circuit_note
 import json
 
-def validate_generated_chunk(code_from_llm):
-    """Reject common invalid patterns as defined by config"""
-    try:
-        for pattern, reason in FORBIDDEN_PATTERNS:
-            if pattern in code_from_llm:
-                return False, reason
-        return True, ""
-    except NameError:
-        #if FORBIDDEN_PATTERNS not defined return true
-        return True, ""
-
 def build_prompt(template_txt, code2llm, block, qiskit_rag, failure_log):
-    txt2llm = template_txt.replace("{}", code2llm.strip(), 1)
+    slot = template_txt.rindex("{}")
+    txt2llm = template_txt[:slot] + code2llm.strip() + template_txt[slot + 2:]
     long_block = function_reply_instruction(code2llm)
     txt2llm += long_block
     rag_sources, failures = [], []
@@ -61,9 +51,6 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     augment_idx = np.random.randint(1, len(parts))
     # select code to be augmented randomly 
     code2llm = parts[augment_idx]
-    # prompt_templates = glob.glob(f'{ROOT_DIR}/templates/FixedPrompts/*/*.txt')
-    # template_path = np.random.choice(prompt_templates)
-    # template_path = f'{ROOT_DIR}/templates/{fname}'
 
     fname = os.path.join(ROOT_DIR, template_txt)
     with open(fname, 'r') as file:
@@ -92,9 +79,6 @@ def augment_network(input_filename='network.py', output_filename='network_x.py',
     if not code_from_llm or code_from_llm.strip() == "ERROR":
         raise RuntimeError("LLM CODE EXTRACTION FAILED: no code from the LLM; "
                            "the child is recorded as a failed mutation")
-    valid_code, invalid_reason = validate_generated_chunk(code_from_llm)
-    if not valid_code:
-        raise RuntimeError(f"Rejected generated chunk: {invalid_reason}")
     if long_block:
         code_from_llm = merge_function_reply(code2llm, code_from_llm)
 

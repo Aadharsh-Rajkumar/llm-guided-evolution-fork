@@ -1,6 +1,0 @@
-Replace or upgrade the classifier in this binary classification model with a stronger algorithm to better predict Titanic passenger survival. Adding helper functions is encouraged.
-
-The current code block:
-```python
-{} 
-```

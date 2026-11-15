@@ -73,21 +73,6 @@ uv run python run_improved.py {constants.OUTPUT_DIR}
 """
     replace_script_configuration("run.sh", run_sh)
 
-    # Generate src/mixt.sh
-    mixt_sh = sections.get("mixt.sh", "") + f"""
-echo "Launching AIsurBL"
-hostname
-module load gcc/13.2.0
-module load uv
-source ~/.bashrc
-export TOKENIZERS_PARALLELISM=false
-export UV_CACHE_DIR="${{TMPDIR:-${{SLURM_TMPDIR:-/tmp}}}}/uv-cache-${{SLURM_JOB_ID:-$$}}"
-mkdir -p "$UV_CACHE_DIR"
-echo "Using UV cache: $UV_CACHE_DIR"
-uv run python llm_crossover.py '{constants.SLURM_MIXT_INPUT_X}' '{constants.SLURM_MIXT_INPUT_Y}' '{constants.SLURM_MIXT_OUTPUT}'  --top_p {constants.SLURM_MIXT_TOP_P}   --temperature {constants.SLURM_MIXT_TEMPERATURE} --apply_quality_control '{constants.SLURM_MIXT_APPLY_QUALITY_CONTROL}' --bit {constants.SLURM_MIXT_BIT}
-"""
-    replace_script_configuration("src/mixt.sh", mixt_sh)
-
     # Get LLM GPU constraint
     llm_gpu = sections.get("llm-gpu", "").strip()
 
