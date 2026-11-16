@@ -23,6 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS_DIR = ROOT / "docs" / "qiskit_rag"
+PLACEBO_DIR = ROOT / "docs" / "rag_placebo"
 TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_]+")
 PINNED_NOTE = "qiskit_imports_api.md"
 GATE_BUDGET_NOTE = "gate_budget.md"
@@ -37,7 +38,9 @@ RAG_FLAG_ENV = {
     "error_feedback": "LLMGE_RAG_ERROR_FEEDBACK",
     "crossover": "LLMGE_RAG_CROSSOVER",
     "reupload_gating": "LLMGE_RAG_REUPLOAD_GATING",
+    "placebo": "LLMGE_RAG_PLACEBO",
 }
+RAG_FLAG_DEFAULT_OFF = {"placebo"}
 ERROR_RE = re.compile(r"^(\w*(?:Error|Exception)\b.*)$", re.M)
 
 
@@ -147,7 +150,17 @@ def recent_failures(failure_log: str | Path | None, block: int | None, limit: in
 
 
 def rag_flags() -> dict[str, bool]:
-    return {name: os.getenv(env, "1") == "1" for name, env in RAG_FLAG_ENV.items()}
+    return {name: os.getenv(env, "0" if name in RAG_FLAG_DEFAULT_OFF else "1") == "1"
+            for name, env in RAG_FLAG_ENV.items()}
+
+
+def placebo_section(text: str) -> str:
+    head = "\n\nRetrieved Python style guidance (use as references, not as code to copy):\n"
+    end = text[text.rindex("\n\nEnd of the reference notes."):]
+    corpus = "\n\n".join(p.read_text(encoding="utf-8").strip() for p in sorted(PLACEBO_DIR.glob("*.md")))
+    size = max(0, len(text) - len(head) - len(end))
+    body = (corpus + "\n\n") * (size // (len(corpus) + 2) + 1)
+    return head + body[:size] + end
 
 
 def accuracy_goal(goal: str) -> bool:
@@ -187,6 +200,8 @@ def build_rag_section(goal: str, code: str, failures: list[str] | None = None,
     text += "\n\nEnd of the reference notes."
     if reply:
         text += f" Reply with {reply} in one ```python fenced block."
+    if flags.get("placebo"):
+        return placebo_section(text), ["placebo"]
     return text, pinned + [item.source for item in results]
 
 

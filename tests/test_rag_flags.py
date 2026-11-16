@@ -83,7 +83,7 @@ def test_each_component_alone(monkeypatch, failure_log, component, marker):
 
 
 def test_reupload_note_only_for_accuracy_goals():
-    flags = {name: True for name in RAG_FLAG_ENV}
+    flags = {name: name != "placebo" for name in RAG_FLAG_ENV}
     for block in BLOCKS[1:]:
         _, sources = build_rag_section("Make one structural mutation to this block", block, flags=flags)
         assert REUPLOAD_NOTE not in sources
@@ -98,7 +98,31 @@ def test_reupload_note_only_for_accuracy_goals():
 def test_flags_default_on(monkeypatch):
     for env in RAG_FLAG_ENV.values():
         monkeypatch.delenv(env, raising=False)
-    assert all(rag_flags().values())
+    flags = rag_flags()
+    assert all(on for name, on in flags.items() if name != "placebo")
+    assert flags["placebo"] is False
+
+
+@pytest.mark.parametrize("block", range(1, len(BLOCKS)))
+def test_placebo_keeps_the_length_but_drops_the_qiskit_content(monkeypatch, failure_log, block):
+    set_flags(monkeypatch, retrieval=True, pin_api=True, pin_gate_budget=True, contract=True,
+              error_feedback=True, reupload_gating=True)
+    text = TEMPLATES[0].read_text()
+    real, *_ = llm_mutation.build_prompt(text, BLOCKS[block], block, True, failure_log)
+    monkeypatch.setenv(RAG_FLAG_ENV["placebo"], "1")
+    fake, sources, *_ = llm_mutation.build_prompt(text, BLOCKS[block], block, True, failure_log)
+    plain, *_ = llm_mutation.build_prompt(text, BLOCKS[block], block, False, failure_log)
+    assert sources == ["placebo"]
+    assert len(fake) == len(real)
+    assert fake.rstrip().splitlines()[-1] == plain.rstrip().splitlines()[-1]
+    added = fake[len(plain) - len(output_instruction(False)):]
+    for word in ("qiskit", "Qiskit", "qubit", "gate", "BM25", "crashed"):
+        assert word not in added
+
+
+def test_empty_function_reply_is_ruled_out():
+    from llm_utils import function_reply_instruction
+    assert "an empty code block is discarded" in function_reply_instruction(BLOCKS[6])
 
 
 def test_function_reply_merge_keeps_unreturned_functions():
