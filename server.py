@@ -1,5 +1,7 @@
+import ast
 import asyncio
 import os
+import textwrap
 import threading
 import time
 
@@ -41,13 +43,23 @@ def pick_batch(waiting, now, batch_size, split=SPLIT_LONG_BATCHES, max_wait=LONG
 _LANG_TAG = re.compile(r"\s*[A-Za-z0-9_+-]*\s*")
 
 
+def parses_as_code(body):
+    try:
+        tree = ast.parse(textwrap.dedent(body))
+    except (SyntaxError, ValueError):
+        return False
+    return any(not (isinstance(node, ast.Expr) and isinstance(node.value, (ast.Name, ast.Constant)))
+               for node in tree.body)
+
+
 def closed_code_block(text):
     parts = text.split("```")
     for seg in parts[1:-1]:
         lines = seg.split("\n")
         if lines and _LANG_TAG.fullmatch(lines[0]):
             lines = lines[1:]
-        if "\n".join(lines).strip().count("\n") >= 1:
+        body = "\n".join(lines).strip()
+        if body.count("\n") >= 1 and parses_as_code(body):
             return True
     return False
 

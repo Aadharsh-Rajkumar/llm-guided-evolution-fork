@@ -166,7 +166,8 @@ def function_reply_instruction(code):
     listed = f" It defines {', '.join(names)}." if names else ""
     return (f"\n\nThis block is long.{listed} Reply with only the complete definitions of the functions "
             "you change (keep their names and signatures) and any new helper functions; every function you "
-            "do not return is kept unchanged.")
+            "do not return is kept unchanged. Return at least one complete function definition; an empty "
+            "code block is discarded.")
 
 
 def output_instruction(long_block):
