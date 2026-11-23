@@ -8,7 +8,7 @@ reading a log can see what went wrong without reproducing it. Catch only the exc
 you know how to handle and keep the protected region small, so that an unexpected error
 elsewhere is not silently swallowed. A bare except clause also catches keyboard interrupts
 and system exits, which is rarely what is wanted. When an error is caught and a different
-one is raised, chain them so that the original traceback is kept. Clean up resources such
+one is raised, chain them so that the original error report is kept. Clean up resources such
 as files and network connections with a context manager, which releases them even when an
 exception escapes. Assertions document assumptions during development, but they can be
 disabled when Python runs with optimisation enabled, so they should never be the only

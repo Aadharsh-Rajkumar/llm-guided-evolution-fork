@@ -7,6 +7,8 @@ import string
 import random
 import pickle
 import argparse
+import hashlib
+import shutil
 import subprocess
 import yaml
 import numpy as np
@@ -382,7 +384,7 @@ def check_contents_for_error(contents):
     """
     contents_lower = contents.lower()
     # Check for explicit error indicators
-    if "traceback" in contents_lower or "slurmstepd: error" in contents_lower:
+    if "Traceback (most recent call last)" in contents or "slurmstepd: error" in contents_lower:
         print("\t☠ Error Found in LLM Job Output.", flush=True)
         return False
     # Check for Slurm time-limit or cancellation
@@ -1207,6 +1209,40 @@ QD_ARCHIVE = {}
 QD_SEEN_FINGERPRINTS = set()
 QD_SEEN_PATH = None
 
+RECORD_FILES = ("sota/QuantumVQC/network.py", "src/cfg/constants.py", "server.py", "server.sh", "run_improved.py",
+                "src/llm_utils.py", "src/llm_mutation.py", "src/llm_crossover.py", "src/qiskit_rag.py")
+
+
+def git_output(*cmd):
+    try:
+        return subprocess.run(["git", *cmd], capture_output=True, text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def write_run_record(global_path, flags, start_gen):
+    record = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "start_generation": start_gen,
+              "host": os.uname().nodename, "slurm_job": os.getenv("SLURM_JOB_ID"),
+              "commit": git_output("rev-parse", "HEAD"), "branch": git_output("rev-parse", "--abbrev-ref", "HEAD"),
+              "changed_files": git_output("status", "--short", "--untracked-files=no").splitlines(),
+              "flags": flags, "crossover_probability": crossover_probability,
+              "mutation_probability": mutation_probability, "prob_qc": PROB_QC,
+              "switches": {k: v for k, v in sorted(os.environ.items()) if k.startswith(("LLMGE_", "QVQC_"))},
+              "sha256": {}}
+    for path in RECORD_FILES:
+        try:
+            with open(path, "rb") as file:
+                record["sha256"][path] = hashlib.sha256(file.read()).hexdigest()
+        except OSError:
+            record["sha256"][path] = None
+    with open(os.path.join(global_path, "run_record.jsonl"), "a") as file:
+        file.write(json.dumps(record) + "\n")
+    constants_copy = os.path.join(global_path, "constants.py")
+    if not os.path.exists(constants_copy):
+        shutil.copy(os.path.realpath("src/cfg/constants.py"), constants_copy)
+    return record
+
+
 # Main Evolution Loop
 if __name__ == "__main__":
     # make output directory
@@ -1250,6 +1286,7 @@ if __name__ == "__main__":
         json.dump(RUN_FLAGS, file, indent=1)
 
     population_data, start_gen, global_data = load_checkpoint(folder_name=args.checkpoints, global_path=args.global_path)
+    write_run_record(args.global_path, RUN_FLAGS, start_gen if population_data else 0)
     if population_data:
         box_print("CHECKPOINT LOADED")
         GLOBAL_DATA = global_data["GLOBAL_DATA"]

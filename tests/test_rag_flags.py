@@ -159,3 +159,24 @@ def test_output_line_off_restores_the_old_prompts(monkeypatch, failure_log):
     norag, *_ = llm_mutation.build_prompt(text, BLOCKS[1], 1, False, failure_log)
     assert rag.rstrip().endswith("Reply with the complete modified code block in one ```python fenced block.")
     assert "nothing after it" not in norag
+
+
+def load_error_check():
+    src = (Path(__file__).resolve().parents[1] / "run_improved.py").read_text()
+    start = src.index("def check_contents_for_error(")
+    end = src.index("\ndef ", start + 1)
+    namespace = {}
+    exec(src[start:end], namespace)
+    return namespace["check_contents_for_error"]
+
+
+def test_a_prompt_that_mentions_tracebacks_is_not_a_failed_job():
+    check = load_error_check()
+    notes = (Path(__file__).resolve().parents[1] / "docs" / "rag_placebo").glob("*.md")
+    prompt = "PROMPT TO LLM\n" + "\n".join(p.read_text() for p in notes) + "\nkeep the original traceback\n"
+    assert check(prompt + "job done\n") is True
+
+
+def test_a_real_python_traceback_is_a_failed_job():
+    check = load_error_check()
+    assert check('Traceback (most recent call last):\n  File "x.py", line 1\nValueError: bad\njob done\n') is False

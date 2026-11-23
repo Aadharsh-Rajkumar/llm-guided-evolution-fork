@@ -65,3 +65,27 @@ def test_server_pool_spreads_requests(tmp_path, monkeypatch):
     assert {llm_utils.get_llm_server_hostname() for _ in range(60)} == {"host-a:8201", "host-b:8202"}
     pool.write_text("host-a:8201\n")
     assert llm_utils.get_llm_server_hostname() == "host-a:8201"
+
+
+def test_every_run_start_is_recorded(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    import os
+    import shutil
+    import subprocess
+    import time
+    src = (ROOT / "run_improved.py").read_text()
+    start = src.index("RECORD_FILES = (")
+    end = src.index("# Main Evolution Loop")
+    namespace = {"os": os, "json": json, "time": time, "hashlib": hashlib, "shutil": shutil, "subprocess": subprocess,
+                 "crossover_probability": 0.35, "mutation_probability": 0.8, "PROB_QC": 0.0}
+    exec(src[start:end], namespace)
+    monkeypatch.chdir(ROOT)
+    monkeypatch.setenv("LLMGE_QISKIT_RAG", "0")
+    namespace["write_run_record"](str(tmp_path), {"generations": 35}, 0)
+    namespace["write_run_record"](str(tmp_path), {"generations": 35}, 7)
+    rows = [json.loads(line) for line in (tmp_path / "run_record.jsonl").read_text().splitlines()]
+    assert [r["start_generation"] for r in rows] == [0, 7]
+    assert len(rows[0]["commit"]) == 40 and rows[0]["switches"]["LLMGE_QISKIT_RAG"] == "0"
+    assert rows[0]["sha256"]["sota/QuantumVQC/network.py"] == hashlib.sha256((ROOT / "sota/QuantumVQC/network.py").read_bytes()).hexdigest()
+    assert (tmp_path / "constants.py").read_text() == (ROOT / "src/cfg/constants.py").read_text()

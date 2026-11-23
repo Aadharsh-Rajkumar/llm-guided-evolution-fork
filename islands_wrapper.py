@@ -62,7 +62,7 @@ def check_contents_for_error(contents):
     """
 
     # Check for error indicators in the file
-    if "traceback" in contents.lower() or "slurmstepd: error" in contents.lower():
+    if "Traceback (most recent call last)" in contents or "slurmstepd: error" in contents.lower():
         print("\t☠ Error Found in LLM Job Output.", flush=True)
         return False
     elif "end of era" in contents.lower():
