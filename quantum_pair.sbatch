@@ -37,6 +37,8 @@ VIEW=${MERGED_VIEW:-ascii}
 ARMS=${ARMS:-rag norag$([ "${MERGED:-0}" = "1" ] && echo " merged")}
 arm_env() {
     case "$1" in
+        baseline)      echo "0 off 0 0 0" ;;
+        allon)         echo "1 $VIEW 1 1 0" ;;
         norag)         echo "0 off 0 0 0" ;;
         rag)           echo "1 off 0 0 0" ;;
         placebo)       echo "1 off 0 0 1" ;;
