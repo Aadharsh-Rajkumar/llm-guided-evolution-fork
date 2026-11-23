@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parents[1]
 SEED = ROOT / "sota" / "QuantumVQC" / "network.py"
 SEED_DRAW = """    rng = np.random.default_rng(SEED)
@@ -66,3 +68,29 @@ def test_majority_class_circuit_gets_the_worst_size(tmp_path):
     assert metrics["val_accuracy"] <= metrics["majority_rate"] + 1e-9
     assert metrics["no_skill"]
     assert objs[1] == 500.0 and objs[2] == 1.0
+
+
+def run_failing_variant(tmp_path, name, old, new):
+    src = SEED.read_text()
+    assert src.count(old) == 1
+    path = tmp_path / f"network_{name}.py"
+    path.write_text(src.replace(old, new))
+    env = dict(os.environ, QVQC_OBJECTIVES="ce,wlive,cesd")
+    env.pop("LLMGE_SEEN_FINGERPRINTS", None)
+    out = subprocess.run([sys.executable, str(path), "--gene-id", name, "--out-dir", str(tmp_path),
+                          "--repr", "", "--train-budget", "12", "--n-starts", "2"],
+                         env=env, capture_output=True, text=True, timeout=900)
+    return out, tmp_path / f"{name}_metrics.json"
+
+
+def test_scaled_readout_probabilities_are_rejected(tmp_path):
+    for k, scale in enumerate(("* 2", "* 1.05", "* np.sqrt(2)")):
+        out, metrics = run_failing_variant(tmp_path, f"scaled{k}", "    return p / total\n", f"    return p / total {scale}\n")
+        assert out.returncode != 0 and not metrics.exists()
+        assert "probabilities that sum to 1" in out.stderr
+
+
+def test_a_renormalised_readout_is_still_accepted(tmp_path):
+    metrics, objs = run_variant(tmp_path, "sharpened", "    return p / total\n",
+                                "    q = (p / total) ** 1.5\n    return q / q.sum()\n", budget=12)
+    assert np.isfinite(objs[0])

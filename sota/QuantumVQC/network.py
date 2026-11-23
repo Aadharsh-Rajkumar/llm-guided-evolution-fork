@@ -332,7 +332,14 @@ def forward_batch(qc, x_params, w_params, X, w_vals):
     """Class probabilities for every row of X, shape (len(X), N_CLASSES)."""
     _charge(len(X))
     marg = readout_batch(qc, x_params, w_params, X, w_vals)
-    return np.stack([readout_probabilities(row) for row in marg])
+    return check_probabilities(np.stack([np.asarray(readout_probabilities(row), dtype=float) for row in marg]))
+
+
+def check_probabilities(p, tol=1e-6):
+    if (p.ndim != 2 or p.shape[1] != N_CLASSES or not np.all(np.isfinite(p))
+            or p.min() < -tol or np.abs(p.sum(axis=1) - 1).max() > tol):
+        raise ValueError("readout_probabilities must return N_CLASSES non-negative probabilities that sum to 1")
+    return p
 
 
 def forward(qc, x_params, w_params, x_vals, w_vals):
