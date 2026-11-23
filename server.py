@@ -14,7 +14,7 @@ import re
 
 import torch
 import transformers
-from transformers import StoppingCriteria, StoppingCriteriaList
+from transformers import LogitsProcessor, LogitsProcessorList, StoppingCriteria, StoppingCriteriaList
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from src.cfg.constants import *
@@ -27,6 +27,7 @@ BATCH_SIZE = 16 if torch.cuda.is_available() and torch.cuda.get_device_propertie
 BATCH_WAIT_TIME = 2  # max wait time for batch to fill in s
 
 STOP_AT_FIRST_CODE_BLOCK = os.getenv("LLMGE_STOP_AT_CODE_BLOCK", "1") == "1"
+CODE_BEFORE_END = os.getenv("LLMGE_CODE_BEFORE_END", "1") == "1"
 SPLIT_LONG_BATCHES = os.getenv("LLMGE_SPLIT_LONG_BATCHES", "1") == "1"
 LONG_PROMPT_MARKER = "This block is long."
 LONG_MAX_WAIT = float(os.getenv("LLMGE_LONG_MAX_WAIT", "600"))
@@ -62,6 +63,37 @@ def closed_code_block(text):
         if body.count("\n") >= 1 and parses_as_code(body):
             return True
     return False
+
+
+def has_code(text):
+    if closed_code_block(text):
+        return True
+    body = "\n".join(line for line in text.split("\n") if not line.strip().startswith("```")).strip()
+    return body.count("\n") >= 1 and parses_as_code(body)
+
+
+class CodeBeforeEnd(LogitsProcessor):
+    def __init__(self, tokenizer, end_ids, every=8):
+        self.tokenizer, self.every = tokenizer, every
+        self.end_ids = sorted({int(i) for i in end_ids if i is not None})
+        self.start, self.calls, self.ok = None, 0, None
+
+    def __call__(self, input_ids, scores):
+        rows = input_ids.shape[0]
+        if self.start is None or self.ok is None or len(self.ok) != rows or input_ids.shape[1] < self.start:
+            self.start, self.calls = input_ids.shape[1], 0
+            self.ok = torch.zeros(rows, dtype=torch.bool, device=scores.device)
+        self.calls += 1
+        if self.calls % self.every == 0:
+            texts = self.tokenizer.batch_decode(input_ids[:, self.start:], skip_special_tokens=True)
+            for i, text in enumerate(texts):
+                if not self.ok[i] and has_code(text):
+                    self.ok[i] = True
+        blocked = (~self.ok).nonzero(as_tuple=True)[0]
+        if len(blocked) and self.end_ids:
+            ends = torch.tensor(self.end_ids, device=scores.device)
+            scores[blocked.unsqueeze(1), ends.unsqueeze(0)] = -float("inf")
+        return scores
 
 
 def runaway(text, max_imports=30, max_repeats=12):
@@ -208,6 +240,8 @@ class LLMModel:
             do_sample=True,
             batch_size=BATCH_SIZE # for batch support
         )
+        eos = self.model.generation_config.eos_token_id
+        self.end_ids = (list(eos) if isinstance(eos, (list, tuple)) else [eos]) + [self.tokenizer.eos_token_id]
         print("pipeline created", flush=True)
         
         self.request_queue = asyncio.Queue() # queue for holding requests to process
@@ -279,6 +313,8 @@ class LLMModel:
                         extra = {}
                         if STOP_AT_FIRST_CODE_BLOCK:
                             extra["stopping_criteria"] = StoppingCriteriaList([FirstCodeBlock(self.tokenizer)])
+                        if CODE_BEFORE_END:
+                            extra["logits_processor"] = LogitsProcessorList([CodeBeforeEnd(self.tokenizer, self.end_ids)])
                         return self.pipeline(
                             chunk,
                             max_new_tokens=max_new_tokens,
